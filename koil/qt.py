@@ -1,7 +1,7 @@
 import asyncio
 from asyncio.futures import Future
-from PyQt5 import QtGui
-from PyQt5.QtCore import QObject, pyqtSignal
+from qtpy import QtGui
+from qtpy.QtCore import QObject, pyqtSignal
 import uuid
 import logging
 from koil.koil import Koil, get_current_koil

@@ -2,7 +2,7 @@ from typing import Type, Union
 from koil.checker.base import BaseChecker
 from koil.checker.registry import register_checker
 from koil.state import KoilState
-from koil.task.base import KoilTask
+from koil.task import KoilTask
 
 
 class JupyterKoilState(KoilState):
@@ -10,6 +10,9 @@ class JupyterKoilState(KoilState):
     def __init__(self, is_terminal=False, **kwargs) -> None:
         super().__init__(**kwargs)
         self.is_terminal = is_terminal
+
+    def get_task_class(self) -> Type[KoilTask]:
+        return KoilTask
         
 
 

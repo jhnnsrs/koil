@@ -48,7 +48,13 @@ def koil(potential_future, force_task=False, force_block=False, koil= None):
         return asyncio.run_coroutine_threadsafe(potential_future, loop).result()
     
     # loop is not running and we have no threaded loop, just returning the futures
-    return loop.run_until_complete(potential_future)
+
+    try:
+        loop = asyncio.get_running_loop()
+        raise NotImplementedError("Checking this out in the future")
+
+    except RuntimeError:
+        return loop.run_until_complete(potential_future)
 
 
 

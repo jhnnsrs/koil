@@ -1,7 +1,5 @@
 from typing import Type
-from pydantic import BaseModel
-
-from koil.task.base import KoilTask
+from koil.task import KoilTask
 
 
 class KoilState(object):

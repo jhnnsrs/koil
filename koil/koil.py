@@ -12,10 +12,6 @@ from koil.state import KoilState
 
 logger = logging.getLogger(__name__)
 
-class HerreError(Exception):
-    pass
-
-
 
 def newloop(loop, loop_started):
     asyncio.set_event_loop(loop)
@@ -62,6 +58,7 @@ class Koil:
             self.state.threaded = force_sync and not force_async # Force async has priority
 
 
+
         if self.state.threaded:
             self.loop = asyncio.new_event_loop()
             self.loop_started_event = threading.Event()
@@ -81,8 +78,6 @@ class Koil:
 
     async def aclose(self):
         loop = asyncio.get_event_loop()
-        
-        #TODO: Maybe get tasks and destroy here
 
     def close(self):
         # Do according to state
@@ -102,14 +97,15 @@ class KoiledContext():
 
     def __enter__(self):
         self.koil = Koil(force_sync=True)
-        return
+        return self.koil
 
     def __exit__(self,*args, **kwargs):
+        self.koil.close()
         return
 
     async def __aenter__(self):
         self.koil = Koil(force_async=True)
-        return
+        return self.koil
 
     async def __aexit__(self,*args, **kwargs):
         await self.koil.aclose()

@@ -2,8 +2,40 @@ from typing import Type, Union
 from koil.checker.base import BaseChecker
 from koil.checker.registry import register_checker
 from koil.state import KoilState
-from koil.task.base import KoilTask
-from koil.task.qt import QtTask
+from koil.task import KoilTask
+import asyncio
+
+
+try:
+    from qtpy import QtWidgets
+    from qtpy import QtCore
+
+    class QtTask(KoilTask, QtCore.QObject):
+        except_signal = QtCore.Signal(Exception)
+        cancelled_signal = QtCore.Signal()
+        done_signal = QtCore.Signal(object)
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+
+
+        async def wrapped_future(self, future):
+            try:
+                value =  await super().wrapped_future(future)
+                self.done_signal.emit(value)
+            except Exception as e:
+                self.except_signal.emit(e)
+            except asyncio.CancelledError:
+                self.cancelled_signal.emit()
+
+    HAS_QT = True
+
+except ImportError as e:
+    QtTask = None
+    QtWidgets = None
+    HAS_QT = False
+    
+
 
 
 class QtKoilState(KoilState):
@@ -26,18 +58,13 @@ class QtChecker(BaseChecker):
         Returns:
             Union[None, KoilState]: [description]
         """
-
-        try:
-            from qtpy import QtWidgets
-
+        if HAS_QT:
             ap_instance = QtWidgets.QApplication.instance() 
+            if ap_instance is None: return None
             ap_instance.lastWindowClosed.connect(self.koil.close)
 
-            if ap_instance is None:
-                return None
+            return QtKoilState(qt_app=ap_instance,threaded=True, prefer_task =True)
 
-            else:
-                return QtKoilState(qt_app=ap_instance,threaded=True, prefer_task =True)
-        except:
-            return None 
+        
+        return None 
 
