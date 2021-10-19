@@ -30,7 +30,7 @@ try:
 
     HAS_QT = True
 
-except ImportError as e:
+except Exception as e:
     QtTask = None
     QtWidgets = None
     HAS_QT = False

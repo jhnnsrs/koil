@@ -30,18 +30,7 @@ class CheckerRegistry():
             assert len(self.desired_none_states) == 1, "More than one state returned from our checkers. This is not going to work"
             return self.desired_none_states[0]
         
-
-
-
-
-
-
-
-    
-
-
-
-
+        
 def register_checker(
     overwrite: bool = False,
     registry: CheckerRegistry=  None,

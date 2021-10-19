@@ -1,7 +1,7 @@
 import asyncio
 from asyncio.futures import Future
 from qtpy import QtGui
-from qtpy.QtCore import QObject, pyqtSignal
+from qtpy.QtCore import QObject, Signal
 import uuid
 import logging
 from koil.koil import Koil, get_current_koil
@@ -14,12 +14,23 @@ Reference = str
 class UnconnectedSignalError(Exception):
     pass
 
+
+def get_receiver_length(qobject, qsignal, callstring):
+    try:
+        return qobject.receivers(qsignal)
+    except:
+        return qobject.receivers(callstring)
+
+
+
+
+
 class FutureWrapper(QObject):
-    call = pyqtSignal(Reference, tuple, dict)
-    resolve = pyqtSignal(Reference, object)
-    reject = pyqtSignal(Reference, Exception)
-    cancel = pyqtSignal(Reference, tuple, dict)
-    cancelled = pyqtSignal(Reference)
+    call = Signal(Reference, tuple, dict)
+    resolve = Signal(Reference, object)
+    reject = Signal(Reference, Exception)
+    cancel = Signal(Reference, tuple, dict)
+    cancelled = Signal(Reference)
 
     
     def __init__(self, *args, koil: Koil = None, cancel_timeout = 4, pass_through=False, **kwargs) -> None:
@@ -58,10 +69,13 @@ class FutureWrapper(QObject):
 
 
     async def acall(self, *args, **kwargs):
-        if self.receivers(self.call) == 0:
-            if self.pass_through: return None
-            else: raise UnconnectedSignalError("This future has no connected receivers")
 
+        if get_receiver_length(self, self.call, "call(str, tuple, dict)") == 0:
+           if self.pass_through: return None
+           else: raise UnconnectedSignalError("This future has no connected receivers")
+
+
+        
         reference = str(uuid.uuid4())
         future = self.loop.create_future()
         self.futureMap[reference] = future
