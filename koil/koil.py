@@ -17,10 +17,10 @@ def newloop(loop, loop_started):
     asyncio.set_event_loop(loop)
     try:
         loop_started.set()
-        print("Running New Event loop in another Thread")
+        logger.info("Running New Event loop in another Thread")
         loop.run_forever()
     finally:
-        print("Loop Shutting Down")
+        logger.info("Loop Shutting Down")
         try:
             _cancel_all_tasks(loop)
             loop.run_until_complete(loop.shutdown_asyncgens())
@@ -85,7 +85,7 @@ class Koil:
             self.loop.call_soon_threadsafe(self.loop.stop())
 
             while self.loop.is_running():
-                print("Waiting to kill")
+                logger.info("Waiting for the Loop to close")
                 time.sleep(0.1)
 
 

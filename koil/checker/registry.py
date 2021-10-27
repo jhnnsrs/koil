@@ -62,6 +62,5 @@ def get_checker_registry(register_defaults=True):
         CHECKER_REGISTRY = CheckerRegistry()
         if register_defaults:
             import koil.checker.defaults
-            print("Getting all of the Defaults")
 
     return CHECKER_REGISTRY

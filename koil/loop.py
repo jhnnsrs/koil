@@ -15,7 +15,7 @@ def unkoil(function):
     return koiled_function
 
 
-def koil(potential_future, force_task=False, force_block=False, koil= None):
+def koil(potential_future, as_task=False, block=False, koil= None):
     """Taks an Async Function and according
     to the current loop setting either returns over
     it synchronusly in the herre loop or returns
@@ -36,13 +36,13 @@ def koil(potential_future, force_task=False, force_block=False, koil= None):
 
     if loop.is_running():
         # Loop is running
-        print("Loop is Running")
+        logger.debug("Loop is Running")
         if loop._thread_id == threading.current_thread().ident: 
-            print("Same thread... Returning Future")
+            logger.debug(f"Same thread... Returning Future {potential_future}")
             # Loop is running in same thread, always returning future here (in an ansyc context you are the master)
             return potential_future
         # We are in a threaded context our state is importat
-        if state.prefer_task and not force_block or force_task:
+        if not block and as_task:
             return koil.state.get_task_class()(future=potential_future, koil=koil)
 
         return asyncio.run_coroutine_threadsafe(potential_future, loop).result()

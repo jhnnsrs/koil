@@ -36,9 +36,9 @@ class KoilTask:
             try:
                 await self.task
             except asyncio.CancelledError as e:
-                print("Cancelled KoilTask")
+                logger.debug("Cancelled KoilTask")
         except Exception as e:
-            print(e)
+            logger.error("Koil Task Cancellation failed")
 
     def cancel(self):
         return asyncio.run_coroutine_threadsafe(self.acancel(), self.loop).result()
