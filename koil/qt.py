@@ -63,11 +63,11 @@ class FutureWrapper(QObject):
     async def acall(self, *args, **kwargs):
         self.loop = asyncio.get_event_loop()
 
-        if get_receiver_length(self, self.call, "call(str, tuple, dict)") == 0:
-            if self.pass_through:
-                return None
-            else:
-                raise UnconnectedSignalError("This future has no connected receivers")
+        # if get_receiver_length(self, self.call, "call(str, tuple, dict)") == 0:
+        #    if self.pass_through:
+        #        return None
+        ##    else:
+        #        raise UnconnectedSignalError("This future has no connected receivers")
 
         reference = str(uuid.uuid4())
         future = self.loop.create_future()
