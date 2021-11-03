@@ -24,21 +24,47 @@ def get_receiver_length(qobject, qsignal, callstring):
 
 
 class FutureWrapper(QObject):
-    call = Signal(Reference, tuple, dict)
-    resolve = Signal(Reference, object)
-    reject = Signal(Reference, Exception)
-    cancel = Signal(Reference, tuple, dict)
-    cancelled = Signal(Reference)
+    callSignal = Signal(Reference, tuple, dict)
+    resolveSignal = Signal(Reference, object)
+    rejectSignal = Signal(Reference, Exception)
+    cancelSignal = Signal(Reference, tuple, dict)
+    cancelledSignal = Signal(Reference)
+
+    def wire(self, receiver, cancel_receiver=None):
+        """Wires a Call signal to a QtPy Slot
+
+        Args:
+            receiver ([type]): [description]
+            cancel_receiver ([type], optional): [description]. Defaults to None.
+        """
+        self.call_connected = True
+        self.callSignal.connect(receiver)
+
+        if cancel_receiver:
+            self.cancel_connected = True
+            self.cancelSignal.connect(cancel_receiver)
+
+    def resolve(self, reference, value):
+        self.resolveSignal.emit(reference, value)
+
+    def reject(self, reference, value: Exception):
+        self.rejectSignal.emit(reference, value)
+
+    def cancelled(self, reference):
+        self.cancelledSignal.emit(reference)
 
     def __init__(self, *args, cancel_timeout=4, pass_through=False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.resolve.connect(self.on_resolve)
-        self.reject.connect(self.on_reject)
-        self.cancelled.connect(self.on_cancelled)
+        self.resolveSignal.connect(self.on_resolve)
+        self.rejectSignal.connect(self.on_reject)
+        self.cancelledSignal.connect(self.on_cancelled)
         self.futureMap = {}
         self.cancelMap = {}
         self.pass_through = pass_through
         self.cancel_timeout = 4
+
+        self.call_connected = False
+        self.cancel_connected = False
 
     def on_cancelled(self, ref):
         assert (
@@ -62,31 +88,31 @@ class FutureWrapper(QObject):
 
     async def acall(self, *args, **kwargs):
         self.loop = asyncio.get_event_loop()
-
-        # if get_receiver_length(self, self.call, "call(str, tuple, dict)") == 0:
-        #    if self.pass_through:
-        #        return None
-        ##    else:
-        #        raise UnconnectedSignalError("This future has no connected receivers")
+        if not self.call_connected:
+            logger.info(f"Future {self} was never connected")
+            if self.pass_through:
+                return None
 
         reference = str(uuid.uuid4())
         future = self.loop.create_future()
         self.futureMap[reference] = future
-        self.call.emit(reference, args, kwargs)
+        self.callSignal.emit(reference, args, kwargs)
+
         try:
             return await future
         except asyncio.CancelledError as e:
-            if self.receivers(self.cancel) > 0:
-                cancel_future = self.loop.create_future()
-                self.cancelMap[reference] = future
-                self.cancel.emit(reference, args, kwargs)
-                try:
-                    await asyncio.wait_for(cancel_future, timeout=self.cancel_timeout)
-                    raise e
-                except asyncio.TimeoutError as e:
-                    logger.error("Cancellation recevied timeout, Cancelling anyways")
-                    raise e
-            else:
+            if not self.cancel_connected:
+                logger.info(f"Future {self} has no cancellation partner. Just Raising")
+                raise e
+
+            cancel_future = self.loop.create_future()
+            self.cancelMap[reference] = future
+            self.cancelSignal.emit(reference, args, kwargs)
+            try:
+                await asyncio.wait_for(cancel_future, timeout=self.cancel_timeout)
+                raise e
+            except asyncio.TimeoutError as t:
+                logger.error("Cancellation recevied timeout, Cancelling anyways")
                 raise e
 
 
