@@ -1,13 +1,12 @@
-
-
 from typing import Dict
 from koil.checker.base import BaseChecker
 from koil.state import KoilState
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-class CheckerRegistry():
-
-
+class CheckerRegistry:
     def __init__(self) -> None:
         self.checkerClasses: Dict[str, BaseChecker] = {}
         self.checkers = {}
@@ -17,23 +16,35 @@ class CheckerRegistry():
 
     def get_checkers(self, koil):
         if not self.checkers:
-            self.checkers = {key: checker_class(koil) for key, checker_class in self.checkerClasses.items()}
+            self.checkers = {
+                key: checker_class(koil)
+                for key, checker_class in self.checkerClasses.items()
+            }
         return self.checkers
 
-
     def get_desired_state(self, koil):
-        self.desired_states = {key: checker.force_state() for key, checker in self.get_checkers(koil).items()}
-        self.desired_none_states = [ state for key, state in self.desired_states.items() if state != None]
+        self.desired_states = {
+            key: checker.force_state()
+            for key, checker in self.get_checkers(koil).items()
+        }
+        self.desired_none_states = [
+            state for key, state in self.desired_states.items() if state != None
+        ]
         if len(self.desired_none_states) == 0:
-            return KoilState(threaded=False) # We are not in an event loop so lets stay sync motherfucker
+            return KoilState(
+                threaded=False
+            )  # We are not in an event loop so lets stay sync motherfucker
         else:
-            assert len(self.desired_none_states) == 1, "More than one state returned from our checkers. This is not going to work"
+            if not len(self.desired_none_states) == 1:
+                logger.info(
+                    f"More than one state returned from our checkers. This is not going to work {self.desired_none_states}"
+                )
             return self.desired_none_states[0]
-        
-        
+
+
 def register_checker(
     overwrite: bool = False,
-    registry: CheckerRegistry=  None,
+    registry: CheckerRegistry = None,
 ):
     """Registers a Checker
 
@@ -49,12 +60,11 @@ def register_checker(
         (registry or get_checker_registry()).register_checker(cls)
         return cls
 
-
     return real_decorator
-    
 
 
 CHECKER_REGISTRY = None
+
 
 def get_checker_registry(register_defaults=True):
     global CHECKER_REGISTRY

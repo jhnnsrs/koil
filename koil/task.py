@@ -9,7 +9,7 @@ class KoilTask:
     def __init__(
         self, future=None, koil=None, *args, log_errors=True, **kwargs
     ) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__()
         self.future = future
         self.task = None
         self.log_errors = log_errors
