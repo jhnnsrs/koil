@@ -1,9 +1,18 @@
 # koil
 
+[![codecov](https://codecov.io/gh/jhnnsrs/koil/branch/master/graph/badge.svg?token=UGXEA2THBV)](https://codecov.io/gh/jhnnsrs/koil)
+[![PyPI version](https://badge.fury.io/py/koil.svg)](https://pypi.org/project/koil/)
+![Maintainer](https://img.shields.io/badge/maintainer-jhnnsrs-blue)
+[![PyPI pyversions](https://img.shields.io/pypi/pyversions/koil.svg)](https://pypi.python.org/pypi/koil/)
+[![PyPI status](https://img.shields.io/pypi/status/koil.svg)](https://pypi.python.org/pypi/koil/)
+[![PyPI download day](https://img.shields.io/pypi/dm/koil.svg)](https://pypi.python.org/pypi/koil/)
+
+### DEVELOPMENT
+
 ### koil is asyncio for humans
 
 koil is an abstraction layer on top of asyncio to enable "sensible defaults" for
-programmers working with frameworks that are barely compatible with asyncio.
+programmers working with frameworks that are barely compatible with asyncio (originally developped to get around pyqt5)
 
 ### Why an abstraction layer on top of asyncio
 
@@ -99,11 +108,10 @@ Now this is more koils problem set. Koil detected on first run (when creating th
 we are running in an QtApplication instance and loaded our asyncornous task off to another thread
 to not interfer with our qt event loop. By passing as_task we also specified that we are do not
 want to block the qt thread to wait for result in the other thread. Koil knowingly that we are in a Qt app
-allows us to now connect to signals of that specific task in the ui_thread. 
+allows us to now connect to signals of that specific task in the ui_thread.
 
 Here koil differnts itself of libraries like qasync that try to mimik the qt event loop in an asyncio event loop.
 With qasync you adopt to the asyncio style and not the style you may want.
-
 
 ### Jupyter notebook
 
@@ -111,6 +119,7 @@ Jupyter is in a unique position as it itself runs in an event loop but is mainly
 that are used to an syncronus interface.
 
 Your library
+
 ```python
 
 @koil
@@ -144,12 +153,10 @@ await call_api()
 
 Making the call run in the same event loop of jupyter.
 
-
-
 ### Considerations
 
 Koil is a library that doesnt want to exist. In general it provides convenience method
-to build asyncornous apis for a still synconrous world. 
+to build asyncornous apis for a still synconrous world.
 
 Therefore when adding koil to your api make sure to not ditch your asyncrs api but extend
 them through convenience methods. One such trick would be to leave your asyncornous functions
@@ -173,7 +180,7 @@ class MyComplexApi:
 ```
 
 Like this you are not experiencing any perfomance hints when running in a complete
-asyncornous context, but you enable unfamiliar users to use your application in a 
+asyncornous context, but you enable unfamiliar users to use your application in a
 syncronous world if they so desire.
 
 Also it is wise to always call your pure async functions from other async functions.
@@ -193,7 +200,7 @@ class MyComplexApi:
         self.connected = True
 
 
-    async def acall_endpoint(self, endpoint): 
+    async def acall_endpoint(self, endpoint):
         if not self.connected:
             await self.aconnect() # call asyncronous no koiled version for better performance
 
