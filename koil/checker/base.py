@@ -1,13 +1,9 @@
-
-
 from abc import abstractmethod
 import abc
-from typing import Type, Union
+from typing import Optional, Type, Union
 from koil.exceptions import KoilException
 from koil.state import KoilState
-
-
-
+from koil.task import KoilTask
 
 
 class CheckerExpection(KoilException):
@@ -21,14 +17,13 @@ class BaseChecker(abc.ABC):
         self.koil = koil
         super().__init__()
 
-
     @abstractmethod
-    def force_state(self) -> Union[None, KoilState]:
+    def force_state(self) -> Optional[KoilState]:
         """Force State
 
-        Please overwrite this method in your Checker. A Checkers 
+        Please overwrite this method in your Checker. A Checkers
         purpose is to identify environment in which we choose
-        different runstates for the koil. 
+        different runstates for the koil.
 
         Your checker should either return None if it does identify
         a certain set of conditions for a certain desired state or
@@ -40,7 +35,5 @@ class BaseChecker(abc.ABC):
         Returns:
             Union[None, KoilState]: The derised State or None if no state is desired
         """
-
-
 
         raise CheckerExpection("Checker did not overwrite the proper function")

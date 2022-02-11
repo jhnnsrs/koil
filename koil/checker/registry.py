@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Type
 from koil.checker.base import BaseChecker
 from koil.state import KoilState
 import logging
@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class CheckerRegistry:
     def __init__(self) -> None:
-        self.checkerClasses: Dict[str, BaseChecker] = {}
-        self.checkers = {}
+        self.checkerClasses: Dict[str, Type[BaseChecker]] = {}
+        self.checkers: Dict[str, BaseChecker] = {}
 
     def register_checker(self, checker_class):
         self.checkerClasses[checker_class.__name__] = checker_class

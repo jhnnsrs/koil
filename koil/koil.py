@@ -1,3 +1,4 @@
+import contextvars
 import threading
 import asyncio
 from asyncio.runners import _cancel_all_tasks
@@ -5,6 +6,12 @@ from threading import Thread
 import os
 import logging
 import time
+
+try:
+    import uvloop
+except:
+    uvloop = None
+
 
 from koil.checker.registry import get_checker_registry
 from koil.state import KoilState
@@ -34,20 +41,21 @@ class Koil:
         force_sync=False,
         force_async=False,
         register_default_checkers=True,
+        register_global=True,
+        uvify=True,
         **overrides,
     ) -> None:
-        """Creates A Herre Client
+        """[summary]
 
         Args:
-            config_path (str, optional): [description]. Defaults to "bergen.yaml".
-            username (str, optional): [description]. Defaults to None.
-            password (str, optional): [description]. Defaults to None.
-            allow_insecure (bool, optional): [description]. Defaults to False.
-            in_sync (bool, optional): Should we force an in_sync modus if an event loop is already running. Loop will be send to another thread. Defaults to True.
-
-        Raises:
-            HerreError: [description]
+            force_sync (bool, optional): [description]. Defaults to False.
+            force_async (bool, optional): [description]. Defaults to False.
+            register_default_checkers (bool, optional): [description]. Defaults to True.
+            register_global (bool, optional): [description]. Defaults to True.
+            uvify (bool, optional): [description]. Defaults to True.
         """
+        if uvify and uvloop is not None:
+            uvloop.install()
 
         self.loop = None
         self.thread_id = None
@@ -64,19 +72,25 @@ class Koil:
             self.loop = asyncio.new_event_loop()
             self.loop_started_event = threading.Event()
             self.thread = Thread(
-                target=newloop, args=(self.loop, self.loop_started_event)
+                name="Koil-Thread",
+                target=newloop,
+                args=(self.loop, self.loop_started_event),
             )
             self.thread.start()
+            self.thread_id = self.thread.ident
             self.loop_started_event.wait()
             logger.info("Running in Seperate Thread so that we can use the sync syntax")
         else:
             try:
                 self.loop = asyncio.get_running_loop()
+                self.thread_id = threading.current_thread().ident
             except RuntimeError as e:
                 self.loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self.loop)
+                self.thread_id = threading.current_thread().ident
 
-        set_current_koil(self)
+        if register_global:
+            set_global_koil(self)
 
     async def aclose(self):
         loop = asyncio.get_event_loop()
@@ -112,8 +126,7 @@ class KoiledContext:
         self.koil = None
 
 
-koiled = KoiledContext()
-
+current_koil = contextvars.ContextVar("current_koil", default=None)
 CURRENT_KOIL = None
 
 
@@ -125,5 +138,10 @@ def get_current_koil(**kwargs):
 
 
 def set_current_koil(koil):
+    global CURRENT_KOIL
+    CURRENT_KOIL = koil
+
+
+def set_global_koil(koil):
     global CURRENT_KOIL
     CURRENT_KOIL = koil
