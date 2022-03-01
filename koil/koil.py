@@ -1,147 +1,159 @@
-import contextvars
-import threading
 import asyncio
-from asyncio.runners import _cancel_all_tasks
-from threading import Thread
+from contextlib import contextmanager
 import os
-import logging
+import sys
+import threading
+from typing import Optional, Type
+from koil.vars import *
 import time
 
-try:
-    import uvloop
-except:
-    uvloop = None
+
+class KoilTask:
+    def __init__(
+        self, future=None, loop=None, *args, log_errors=True, **kwargs
+    ) -> None:
+        super().__init__()
+        self.future = future
+        self.log_errors = log_errors
+        self.loop = loop
+
+        self.task = None
+
+    async def wrapped_future(self, future):
+        try:
+            return await future
+        except Exception as e:
+            raise e
+
+    def run(self):
+        self.task = self.loop.create_task(self.wrapped_future(self.future))
+        return self
+
+    async def acancel(self):
+        try:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError as e:
+                print("Cancelled KoilTask")
+        except Exception as e:
+            print("Koil Task Cancellation failed")
+
+    def cancel(self):
+        return asyncio.run_coroutine_threadsafe(self.acancel(), self.loop).result()
+
+    def result(self):
+        return asyncio.run_coroutine_threadsafe(self.acancel(), self.loop).result()
 
 
-from koil.checker.registry import get_checker_registry
-from koil.state import KoilState
+@contextmanager
+def _selector_policy():
+    original_policy = asyncio.get_event_loop_policy()
+    try:
+        if (
+            sys.version_info >= (3, 8)
+            and os.name == "nt"
+            and hasattr(asyncio, "WindowsSelectorEventLoopPolicy")
+        ):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-logger = logging.getLogger(__name__)
+        yield
+    finally:
+        asyncio.set_event_loop_policy(original_policy)
 
 
-def newloop(loop, loop_started):
+def run_threaded_event_loop(loop):
     asyncio.set_event_loop(loop)
     try:
-        loop_started.set()
-        logger.info("Running New Event loop in another Thread")
         loop.run_forever()
     finally:
-        logger.info("Loop Shutting Down")
         try:
-            _cancel_all_tasks(loop)
-            loop.run_until_complete(loop.shutdown_asyncgens())
+            # mimic asyncio.run() behavior
+            # cancel unexhausted async generators
+            tasks = asyncio.all_tasks(loop)
+            for task in tasks:
+                task.cancel()
+
+            async def gather():
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            loop.run_until_complete(gather())
+            for task in tasks:
+                if task.cancelled():
+                    continue
+                if task.exception() is not None:
+                    loop.call_exception_handler(
+                        {
+                            "message": "unhandled exception during loop shutdown",
+                            "exception": task.exception(),
+                            "task": task,
+                        }
+                    )
+            if hasattr(loop, "shutdown_asyncgens"):
+                loop.run_until_complete(loop.shutdown_asyncgens())
         finally:
-            asyncio.set_event_loop(None)
             loop.close()
+
+
+def get_threaded_loop(name="KoilLoop"):
+    """Create or return the default Koil IO loop
+    The loop will be running on a separate thread.
+    """
+    with _selector_policy():
+        newloop = asyncio.new_event_loop()
+
+    th = threading.Thread(target=run_threaded_event_loop, args=(newloop,), name=name)
+    th.daemon = True
+    th.start()
+
+    return newloop
 
 
 class Koil:
     def __init__(
         self,
-        force_sync=False,
-        force_async=False,
-        register_default_checkers=True,
-        register_global=True,
-        uvify=True,
-        **overrides,
+        name="Koiloop",
+        grace_period=None,
+        task_class: Optional[Type[KoilTask]] = None,
     ) -> None:
-        """[summary]
-
-        Args:
-            force_sync (bool, optional): [description]. Defaults to False.
-            force_async (bool, optional): [description]. Defaults to False.
-            register_default_checkers (bool, optional): [description]. Defaults to True.
-            register_global (bool, optional): [description]. Defaults to True.
-            uvify (bool, optional): [description]. Defaults to True.
-        """
-        if uvify and uvloop is not None:
-            uvloop.install()
-
+        self.it = "it"
+        self.name = name
+        self.task_class = task_class
         self.loop = None
-        self.thread_id = None
-        self.state = get_checker_registry(
-            register_defaults=register_default_checkers
-        ).get_desired_state(self)
 
-        if force_sync or force_async:
-            self.state.threaded = (
-                force_sync and not force_async
-            )  # Force async has priority
+    def __enter__(self):
+        loop = current_loop.get()
+        current_taskclass.set(
+            self.task_class or current_taskclass.get(KoilTask)
+        )  # task classes can be overwriten, as they only apply to the context
+        if loop is not None:
+            # already runnning with a koiled loop, we will just attach to it
+            return self
 
-        if self.state.threaded:
-            self.loop = asyncio.new_event_loop()
-            self.loop_started_event = threading.Event()
-            self.thread = Thread(
-                name="Koil-Thread",
-                target=newloop,
-                args=(self.loop, self.loop_started_event),
-            )
-            self.thread.start()
-            self.thread_id = self.thread.ident
-            self.loop_started_event.wait()
-            logger.info("Running in Seperate Thread so that we can use the sync syntax")
-        else:
-            try:
-                self.loop = asyncio.get_running_loop()
-                self.thread_id = threading.current_thread().ident
-            except RuntimeError as e:
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-                self.thread_id = threading.current_thread().ident
-
-        if register_global:
-            set_global_koil(self)
+        self.loop = get_threaded_loop(self.name)
+        current_loop.set(self.loop)
+        return self
 
     async def aclose(self):
         loop = asyncio.get_event_loop()
+        print("Causing loop to stop")
+        loop.stop()
+        print("Loop Stopped")
 
-    def close(self):
-        # Do according to state
-        if self.state.threaded:
-            self.loop.call_soon_threadsafe(self.loop.stop())
+    def __exit__(self, exc_type, exc_val, exc_tb):
+
+        if self.loop is not None:
+            asyncio.run_coroutine_threadsafe(self.aclose(), self.loop)
+
+            iterations = 0
 
             while self.loop.is_running():
-                logger.info("Waiting for the Loop to close")
-                time.sleep(0.1)
+                time.sleep(0.001)
+                iterations += 1
+                if iterations == 100:
+                    print(
+                        "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
+                    )
 
-
-class KoiledContext:
-    def __init__(self) -> None:
-        pass
-
-    def __enter__(self):
-        self.koil = Koil(force_sync=True)
-        return self.koil
-
-    def __exit__(self, *args, **kwargs):
-        self.koil.close()
-        return
-
-    async def __aenter__(self):
-        self.koil = Koil(force_async=True)
-        return self.koil
-
-    async def __aexit__(self, *args, **kwargs):
-        await self.koil.aclose()
-        self.koil = None
-
-
-current_koil = contextvars.ContextVar("current_koil", default=None)
-CURRENT_KOIL = None
-
-
-def get_current_koil(**kwargs):
-    global CURRENT_KOIL
-    if not CURRENT_KOIL:
-        CURRENT_KOIL = Koil(**kwargs)
-    return CURRENT_KOIL
-
-
-def set_current_koil(koil):
-    global CURRENT_KOIL
-    CURRENT_KOIL = koil
-
-
-def set_global_koil(koil):
-    global CURRENT_KOIL
-    CURRENT_KOIL = koil
+            current_loop.set(None)
+            current_taskclass.set(self.task_class)

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "koil"
-version = "0.1.60"
+version = "0.1.77"
 readme = "README.md"
 description = "An abstract event loop to run in an async and sync context (especially jupyter and qt), with utility functions to allow both accesses"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
