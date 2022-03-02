@@ -15,18 +15,18 @@ const FeatureList: FeatureItem[] = [
     image: "/img/undraw_docusaurus_mountain.svg",
     description: (
       <>
-        Rath was designed from the ground up to be easily installed and used
+        Koil was designed from the ground up to be easily installed and used
         with your favorite technologies.
       </>
     ),
   },
   {
-    title: "Composable",
+    title: "Contextify",
     image: "/img/undraw_docusaurus_tree.svg",
     description: (
       <>
-        Include complex logic in your api calls, but keep your code simple and
-        reusable.
+        Use async context managers in a synchronous way. Koil takes care of
+        spinning up eventloops and tearing them down.
       </>
     ),
   },
@@ -35,7 +35,8 @@ const FeatureList: FeatureItem[] = [
     image: "/img/undraw_docusaurus_react.svg",
     description: (
       <>
-        Rath was designed async first but provides convenience for sync methods
+        Koil is just a thin wrapper around the asyncio library, with additional
+        support for qtpy if needed.
       </>
     ),
   },
