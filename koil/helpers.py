@@ -46,7 +46,7 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
 
 def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwargs):
     try:
-        loop0 = asyncio.events.get_running_loop()
+        asyncio.events.get_running_loop()
         if ensure_koiled:
             raise NotImplementedError(
                 "Calling sync() from within a running loop, async that bitch"
@@ -101,9 +101,7 @@ def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwar
 
         if as_task:
             raise RuntimeError(
-                """No loop is running. That means you cannot have this run as a task. Try providing a loop by entering a Koil() context.\n
-
-                If you spawned a thread, in an Excecutor. You can use check_cancel() if you want to check if the thread was cancelled. Do this periodically
+                """No loop is running. That means you cannot have this run as a task. Try providing a loop by entering a Koil() context.
                 """
             )
 

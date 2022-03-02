@@ -1,3 +1,0 @@
-
-class KoilException(BaseException):
-    pass
