@@ -3,9 +3,22 @@ from koil.vars import *
 import time
 
 
-def unkoil_gen(iterator, *args, timeout=None, **kwargs):
+def unkoil_gen(iterator, *args, as_task=False, timeout=None, **kwargs):
+    loop = current_loop.get()
+
+    if as_task:
+        genclass = current_genclass.get()
+        assert genclass is not None, "No gen class set"
+        return genclass(iterator, args, kwargs, loop=loop)
+
+    return unkoil_gen_no_task(iterator, *args, timeout=timeout, **kwargs)
+
+
+def unkoil_gen_no_task(iterator, *args, timeout=None, **kwargs):
+    print("insoinsoidsnosidnfosindfosidnfolsinbdf")
     loop = current_loop.get()
     cancel_event = current_cancel_event.get()
+    print("asdasdasdasdasdasd")
 
     if loop.is_closed():
         raise RuntimeError("Loop is not running")
@@ -19,7 +32,7 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
     ait = iterator(*args, **kwargs).__aiter__()
     res = [False, False]
 
-    async def next_on_ait():
+    async def next_on_ait_with_context():
         try:
             try:
                 obj = await ait.__anext__()
@@ -30,7 +43,7 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
             return [False, e]
 
     while True:
-        res = asyncio.run_coroutine_threadsafe(next_on_ait(), loop=loop)
+        res = asyncio.run_coroutine_threadsafe(next_on_ait_with_context(), loop=loop)
         while not res.done():
             if cancel_event and cancel_event.is_set():
                 raise Exception("Task was cancelled")
@@ -75,9 +88,9 @@ def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwar
                 return x, newcontext
 
             if as_task:
-                taskclass = current_task_class.get()
+                taskclass = current_taskclass.get()
                 assert taskclass is not None, "No task class set"
-                return taskclass(passed_with_context(), loop).run()
+                return taskclass(coro, args, kwargs, loop=loop)
 
             co_future = asyncio.run_coroutine_threadsafe(passed_with_context(), loop)
             while not co_future.done():

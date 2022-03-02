@@ -1,30 +1,33 @@
 import logging
 import asyncio
-
+import time
+from koil.vars import current_cancel_event, current_loop
 
 logger = logging.getLogger(__name__)
 
 
 class KoilTask:
     def __init__(
-        self, future=None, loop=None, *args, log_errors=True, **kwargs
+        self,
+        coro,
+        *args,
+        log_errors=True,
+        loop=None,
+        **kwargs,
     ) -> None:
-        super().__init__()
-        self.future = future
-        self.log_errors = log_errors
-        self.loop = loop
-
+        super().__init__(*args, **kwargs)
+        self.coro = coro
+        self.loop = loop or current_loop.get()
+        assert self.loop, "No koiled Loop found"
         self.task = None
-
-    async def wrapped_future(self, future):
-        try:
-            return await future
-        except Exception as e:
-            raise e
+        self.future = None
 
     def run(self):
-        self.task = self.loop.create_task(self.wrapped_future(self.future))
+        self.future = asyncio.run_coroutine_threadsafe(self.coro, self.loop)
         return self
+
+    def done(self):
+        return self.future.done()
 
     async def acancel(self):
         try:
@@ -37,7 +40,48 @@ class KoilTask:
             logger.debug("Koil Task Cancellation failed")
 
     def cancel(self):
-        return asyncio.run_coroutine_threadsafe(self.acancel(), self.loop).result()
+        self.future.cancel()
 
     def result(self):
-        return asyncio.run_coroutine_threadsafe(self.acancel(), self.loop).result()
+        assert self.future, "Task was never run! Please run task before"
+        return self.future.result()
+
+
+class KoilGeneratorTask:
+    def __init__(self, iterator, *args, loop=None, **kwargs) -> None:
+        print("initializitng generator task")
+        super().__init__(*args, **kwargs)
+        self.iterator = iterator
+        self.loop = loop or current_loop.get()
+        self.task = None
+
+    def run(self):
+        ait = self.iterator.__aiter__()
+        res = [False, False]
+        cancel_event = current_cancel_event.get()
+
+        async def next_on_ait_with_context():
+            try:
+                try:
+                    obj = await ait.__anext__()
+                    return [False, obj]
+                except StopAsyncIteration:
+                    return [True, None]
+            except asyncio.CancelledError as e:
+                return [False, e]
+
+        while True:
+            res = asyncio.run_coroutine_threadsafe(
+                next_on_ait_with_context(), loop=self.loop
+            )
+            while not res.done():
+                if cancel_event and cancel_event.is_set():
+                    raise Exception("Task was cancelled")
+
+                time.sleep(0.01)
+            done, obj = res.result()
+            if done:
+                if obj:
+                    raise obj
+                break
+            yield obj

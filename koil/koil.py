@@ -6,7 +6,7 @@ import threading
 from typing import Optional, Type
 from koil.errors import ContextError
 from koil.vars import *
-from koil.task import KoilTask
+from koil.task import KoilGeneratorTask, KoilTask
 import time
 import logging
 
@@ -93,22 +93,24 @@ class Koil:
         grace_period=None,
         uvify=True,
         task_class: Optional[Type[KoilTask]] = None,
+        gen_class: Optional[Type[KoilGeneratorTask]] = None,
     ) -> None:
         self.it = "it"
         self.name = name
         self.task_class = task_class
+        self.gen_class = gen_class
         self.loop = None
+        self.popped_loop = None
         self.uvify = uvify
 
     async def __aenter__(self):
-        self.old_loop = current_loop.get(None)
-        self.loop = asyncio.get_event_loop()
-        self.loop = current_loop.set(self.loop)
+        self.old_loop = current_loop.get()
+        loop = asyncio.get_event_loop()
+        current_loop.set(loop)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self.loop = asyncio.get_event_loop()
-        self.loop = current_loop.set(self.old_loop)
+        current_loop.set(self.old_loop)
 
     def __enter__(self):
         try:
@@ -119,16 +121,22 @@ class Koil:
         except RuntimeError:
             pass
 
-        loop = current_loop.get()
+        self.old_loop = current_loop.get()
+        self.old_taskclass = current_taskclass.get()
+        self.old_genclass = current_genclass.get()
+
         current_taskclass.set(
-            self.task_class or current_taskclass.get(KoilTask)
+            self.task_class or self.old_taskclass or KoilTask
         )  # task classes can be overwriten, as they only apply to the context
-        if loop is not None:
+        current_genclass.set(
+            self.gen_class or self.old_genclass or KoilGeneratorTask
+        )  # task classes can be overwriten, as they only apply to the context
+        if self.old_loop is not None:
             # already runnning with a koiled loop, we will just attach to it
             return self
 
-        self.loop = get_threaded_loop(self.name, uvify=self.uvify)
-        current_loop.set(self.loop)
+        self.popped_loop = get_threaded_loop(self.name, uvify=self.uvify)
+        current_loop.set(self.popped_loop)
         return self
 
     async def aclose(self):
@@ -138,12 +146,12 @@ class Koil:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
 
-        if self.loop is not None:
-            asyncio.run_coroutine_threadsafe(self.aclose(), self.loop)
+        if self.popped_loop is not None:
+            asyncio.run_coroutine_threadsafe(self.aclose(), self.popped_loop)
 
             iterations = 0
 
-            while self.loop.is_running():
+            while self.popped_loop.is_running():
                 time.sleep(0.001)
                 iterations += 1
                 if iterations == 100:
@@ -151,5 +159,7 @@ class Koil:
                         "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
                     )
 
-            current_loop.set(None)
-            current_taskclass.set(self.task_class)
+            current_loop.set(self.old_loop)  # Reset the loop
+
+        current_taskclass.set(self.old_taskclass)
+        current_taskclass.set(self.old_genclass)

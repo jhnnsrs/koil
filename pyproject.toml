@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "koil"
-version = "0.1.80"
+version = "0.1.81"
 readme = "README.md"
 description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
@@ -30,13 +30,13 @@ pydoc-markdown = "^4.5.1"
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [[tool.pydoc-markdown.loaders]]
 type = "python"
 search_path = [ "koil" ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
 
 [tool.pydoc-markdown.renderer]
 type = "docusaurus"

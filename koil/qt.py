@@ -1,10 +1,16 @@
 import asyncio
 from asyncio.futures import Future
 from qtpy import QtGui
-from qtpy.QtCore import QObject, Signal
+from qtpy.QtCore import QObject, Signal, QThread
 import uuid
 import logging
-from koil.koil import Koil, get_current_koil
+from koil.koil import Koil
+from qtpy import QtWidgets
+from qtpy import QtCore
+from concurrent import futures
+
+from koil.task import KoilGeneratorTask, KoilTask
+
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +93,10 @@ class FutureWrapper(QObject):
             self.loop.call_soon_threadsafe(future.set_exception, exp)
 
     async def acall(self, *args, **kwargs):
+        print("Called Here")
         self.loop = asyncio.get_event_loop()
         if not self.call_connected:
-            logger.info(f"Future {self} was never connected")
+            print(f"Future {self} was never connected")
             if self.pass_through:
                 return None
 
@@ -99,6 +106,7 @@ class FutureWrapper(QObject):
         self.callSignal.emit(reference, args, kwargs)
 
         try:
+            print("Calling Future?")
             return await future
         except asyncio.CancelledError as e:
             if not self.cancel_connected:
@@ -125,3 +133,71 @@ class TimeoutFutureWrapper(FutureWrapper):
         return await asyncio.wait_for(
             super().acall(*args, **kwargs), timeout=self.timeout
         )
+
+
+class QtTask(KoilTask, QtCore.QObject):
+    errored = QtCore.Signal(Exception)
+    cancelled = QtCore.Signal()
+    returned = QtCore.Signal(object)
+
+    async def wrapped_future(self):
+        try:
+            i = await self.coro
+            self.returned.emit(i)
+        except Exception as e:
+            self.errored.emit(e)
+        except asyncio.CancelledError:
+            self.cancelled.emit()
+
+    def run(self):
+        self.future = asyncio.run_coroutine_threadsafe(self.wrapped_future(), self.loop)
+        return self
+
+
+class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
+    errored = QtCore.Signal(Exception)
+    cancelled = QtCore.Signal()
+    yielded = QtCore.Signal(object)
+    done = QtCore.Signal(object)
+
+    async def wrapped_future(self):
+        try:
+            async for i in self.iterator:
+                self.yielded.emit(i)
+        except Exception as e:
+            self.errored.emit(e)
+        except asyncio.CancelledError:
+            self.cancelled.emit()
+
+    def run(self):
+        self.future = asyncio.run_coroutine_threadsafe(self.wrapped_future(), self.loop)
+        return self
+
+
+class QtKoil(Koil, QtCore.QObject):
+    def __init__(
+        self,
+        *args,
+        disconnect_on_close=True,
+        autoconnect=True,
+        parent=None,
+        uvify=False,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            *args, **kwargs, uvify=False, task_class=QtTask, gen_class=QtGeneratorTask
+        )
+        self.disconnect_on_close = disconnect_on_close
+        if autoconnect:
+            self.connect()
+
+    def close(self):
+        self.__exit__(None, None, None)
+
+    def connect(self):
+        ap_instance = QtWidgets.QApplication.instance()
+        if ap_instance is None:
+            raise NotImplementedError("Qt Application not found")
+        if self.disconnect_on_close:
+            ap_instance.lastWindowClosed.connect(self.close)
+        return self.__enter__()
