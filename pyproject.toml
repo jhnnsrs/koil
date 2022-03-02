@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "koil"
-version = "0.1.78"
+version = "0.1.80"
 readme = "README.md"
-description = "An abstract event loop to run in an async and sync context (especially jupyter and qt), with utility functions to allow both accesses"
+description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
 license = "CC BY-NC 3.0"
 packages = [{include = "koil"}]
@@ -11,10 +11,12 @@ packages = [{include = "koil"}]
 python = "^3.7"
 jupyter = {version = "^1.0.0", optional = true}
 qtpy = {version = ">1", optional = true}
+uvloop =  {version = "^0.16.0", optional= true}
 
 [tool.poetry.extras]
 jupyter = ["jupyter"]
 qtpy = ["qt"]
+uvloop = ["uvloop"]
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
@@ -22,7 +24,21 @@ pytest-aiohttp = "^0.3.0"
 pytest-cov = "^3.0.0"
 black = "^21.12b0"
 tox = "^3.24.5"
+pydoc-markdown = "^4.5.1"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+
+[[tool.pydoc-markdown.loaders]]
+type = "python"
+search_path = [ "koil" ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.pydoc-markdown.renderer]
+type = "docusaurus"
+docs_base_path = "website/docs"
+
