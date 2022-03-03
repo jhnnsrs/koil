@@ -2,6 +2,7 @@ import logging
 import asyncio
 import time
 from koil.vars import current_cancel_event, current_loop
+import inspect
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,7 @@ class KoilTask:
         *args,
         log_errors=True,
         loop=None,
+        bypass_test=False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -21,6 +23,10 @@ class KoilTask:
         assert self.loop, "No koiled Loop found"
         self.task = None
         self.future = None
+        if not bypass_test:
+            assert self.loop.is_running(), "Loop is not running"
+            assert not self.loop.is_closed(), "Loop is closed"
+            assert inspect.iscoroutine(coro), "Task is not a coroutine"
 
     def run(self):
         self.future = asyncio.run_coroutine_threadsafe(self.coro, self.loop)

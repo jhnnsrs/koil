@@ -9,7 +9,7 @@ def unkoil_gen(iterator, *args, as_task=False, timeout=None, **kwargs):
     if as_task:
         genclass = current_genclass.get()
         assert genclass is not None, "No gen class set"
-        return genclass(iterator, args, kwargs, loop=loop)
+        return genclass(iterator(*args, kwargs), loop=loop)
 
     return unkoil_gen_no_task(iterator, *args, timeout=timeout, **kwargs)
 
@@ -90,7 +90,7 @@ def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwar
             if as_task:
                 taskclass = current_taskclass.get()
                 assert taskclass is not None, "No task class set"
-                return taskclass(coro, args, kwargs, loop=loop)
+                return taskclass(coro(*args, **kwargs), loop=loop)
 
             co_future = asyncio.run_coroutine_threadsafe(passed_with_context(), loop)
             while not co_future.done():

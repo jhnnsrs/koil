@@ -1,5 +1,6 @@
 import asyncio
 from asyncio.futures import Future
+import inspect
 from qtpy import QtGui
 from qtpy.QtCore import QObject, Signal, QThread
 import uuid
@@ -135,6 +136,60 @@ class TimeoutFutureWrapper(FutureWrapper):
         )
 
 
+class QtFuture:
+    def __init__(self):
+        self.loop = asyncio.get_event_loop()
+        self.aiofuture = asyncio.Future()
+        self.iscancelled = False
+
+    def _set_cancelled(self):
+        """WIll be called by the asyncio loop"""
+        self.iscancelled = True
+
+    def resolve(self, *args):
+        if len(args) == 0:
+            return self.loop.call_soon_threadsafe(self.aiofuture.set_result, None)
+
+        self.loop.call_soon_threadsafe(self.aiofuture.set_result, *args)
+
+    def reject(self, exp: Exception):
+        self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
+
+
+class QtCoro(QtCore.QObject):
+    called = QtCore.Signal(QtFuture, tuple, dict)
+    cancelled = QtCore.Signal(str)
+
+    def __init__(self, coro, *args, autoresolve=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert not inspect.iscoroutinefunction(
+            coro
+        ), "This should not be a coroutine, but a normal qt slot with the first parameter being a qtfuture"
+        self.coro = coro
+        self.called.connect(self.on_called)
+        self.autoresolve = autoresolve
+
+    def on_called(self, future, args, kwargs):
+        try:
+            x = self.coro(future, *args, **kwargs)
+            if self.autoresolve:
+                future.resolve(x)
+        except Exception as e:
+            future.reject(e)
+
+    async def acall(self, *args, timeout=None, **kwargs):
+        qtfuture = QtFuture()
+        self.called.emit(qtfuture, args, kwargs)
+        try:
+            if timeout:
+                return await asyncio.wait_for(qtfuture.aiofuture, timeout=timeout)
+
+            return await qtfuture.aiofuture
+        except asyncio.CancelledError:
+            qtfuture._set_cancelled()
+            raise
+
+
 class QtTask(KoilTask, QtCore.QObject):
     errored = QtCore.Signal(Exception)
     cancelled = QtCore.Signal()
@@ -163,6 +218,7 @@ class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
     async def wrapped_future(self):
         try:
             async for i in self.iterator:
+                print(i)
                 self.yielded.emit(i)
         except Exception as e:
             self.errored.emit(e)
