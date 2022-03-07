@@ -150,10 +150,6 @@ class QtFuture:
 
     def resolve(self, *args):
         ctx = contextvars.copy_context()
-
-        if len(args) == 0:
-            return self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,))
-
         self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,) + args)
 
     def reject(self, exp: Exception):
@@ -205,13 +201,15 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         self.called.emit(qtfuture, args, kwargs, ctx)
         try:
             if timeout:
-                x, context = await asyncio.wait_for(qtfuture.aiofuture, timeout=timeout)
-                for ctx, value in context.items():
-                    ctx.set(value)
+                context, x = await asyncio.wait_for(qtfuture.aiofuture, timeout=timeout)
+            else:
+                context, x = await qtfuture.aiofuture
 
-                return x
+            for ctx, value in context.items():
+                ctx.set(value)
 
-            return await qtfuture.aiofuture
+            return x
+
         except asyncio.CancelledError:
             qtfuture._set_cancelled()
             raise
@@ -271,11 +269,11 @@ class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
         super().__init__(*args, **kwargs)
         self._yieldedwithoutcontext.connect(self.on_yieldedwithoutcontext)
 
-    def on_yieldedwithoutcontext(self, value, context):
+    def on_yieldedwithoutcontext(self, x, context):
         for ctx, value in context.items():
             ctx.set(value)
 
-        self.yielded.emit(value)
+        self.yielded.emit(x)
 
     async def wrapped_future(self, args, kwargs, ctxs):
         print("osinosinsoi")
