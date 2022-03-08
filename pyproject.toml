@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "koil"
-version = "0.1.91"
+version = "0.1.92"
 readme = "README.md"
 description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
@@ -27,6 +27,7 @@ tox = "^3.24.5"
 pydoc-markdown = "^4.5.1"
 pytest-qt = "^4.0.2"
 PyQt5 = "^5.15.6"
+QtPy = "^2.0.1"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
