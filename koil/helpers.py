@@ -1,4 +1,5 @@
 import asyncio
+from koil.utils import run_threaded_with_context
 from koil.vars import *
 import time
 
@@ -41,13 +42,14 @@ def unkoil_gen_no_task(iterator, *args, timeout=None, **kwargs):
             return [False, e]
 
     while True:
-        res, context = asyncio.run_coroutine_threadsafe(next_on_ait(), loop=loop)
+        res = run_threaded_with_context(next_on_ait(), loop=loop)
         while not res.done():
             if cancel_event and cancel_event.is_set():
                 raise Exception("Task was cancelled")
 
             time.sleep(0.01)
-        done, obj = res.result()
+        x, context = res.result()
+        done, obj = x
         if done:
             if obj:
                 raise obj

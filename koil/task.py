@@ -86,6 +86,9 @@ class KoilGeneratorTask(Generic[P, T]):
         self.kwargs = kwargs
         self.loop = loop or current_loop.get()
         self.task = None
+        self._task_done = False
+        self._buffer = []
+        self._latest_context = None
         if not bypass_test:
             assert self.loop.is_running(), "Loop is not running"
             assert not self.loop.is_closed(), "Loop is closed"
@@ -106,23 +109,15 @@ class KoilGeneratorTask(Generic[P, T]):
             except asyncio.CancelledError as e:
                 return [False, e]
 
-        while True:
-            res, context = run_threaded_with_context(next_on_ait(), loop=self.loop)
-            while not res.done():
-                if cancel_event and cancel_event.is_set():
-                    raise Exception("Task was cancelled")
+        raise NotImplementedError("No design decision was taken")
 
-                time.sleep(0.01)
-            done, obj = res.result()
-            if done:
-                if obj:
-                    raise obj
-                break
-
-            for ctx, value in context.items():
-                ctx.set(value)
-
-            yield obj
+    def done(self):
+        return self._task_done
 
     def result(self):
+        if not self._task_done:
+            raise Exception("Task is not done yet")
+
+        self._buffer
+
         raise NotImplementedError("This is a generator that yields results")

@@ -1,18 +1,20 @@
 from koil.helpers import unkoil
 from koil.koil import Koil
 import inspect
+from typing import Callable, Type, TypeVar
+
+T = TypeVar("T")
 
 
-def koilable(fieldname="__koil", add_connectors=False, **koilparams):
+def koilable(
+    fieldname: str = "__koil", add_connectors: bool = False, **koilparams
+) -> Callable[[Type[T]], Type[T]]:
     """
     Decorator to make an async generator koilable.
 
-
-
-
     """
 
-    def real_cls_decorator(cls):
+    def real_cls_decorator(cls: Type[T]) -> Type[T]:
 
         cls.__koilable__ = True
         assert hasattr(cls, "__aenter__"), "Class must implement __aenter__"
@@ -42,8 +44,9 @@ def koilable(fieldname="__koil", add_connectors=False, **koilparams):
 
         cls.__enter__ = koiled_enter
         cls.__exit__ = koiled_exit
-        cls.disconnect = koiled_exit
-        cls.connect = koiled_enter
+        if add_connectors:
+            cls.disconnect = disconnect
+            cls.connect = koiled_enter
 
         return cls
 
