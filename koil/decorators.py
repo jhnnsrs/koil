@@ -29,7 +29,6 @@ def koilable(
         def koiled_enter(self, *args, **kwargs):
             setattr(self, fieldname, Koil(**koilparams))
             getattr(self, fieldname).__enter__()
-            print(self.__aenter__)
             return unkoil(self.__aenter__, *args, **kwargs)
 
         def koiled_exit(self, *args, **kwargs):

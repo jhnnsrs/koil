@@ -1,6 +1,7 @@
 import contextvars
 import logging
 import asyncio
+import threading
 import time
 from typing import AsyncIterator, Awaitable, Callable, Coroutine, Generic, TypeVar
 from koil.vars import current_cancel_event, current_loop
@@ -28,16 +29,18 @@ class KoilTask(Generic[T, P]):
     def __init__(
         self,
         coro: Callable[P, Awaitable[T]],
-        args=(),
-        kwargs={},
+        *args,
+        preset_args=(),
+        preset_kwargs={},
         log_errors=True,
         loop=None,
         bypass_test=False,
+        **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.coro = coro
-        self.args = args
-        self.kwargs = kwargs
+        self.args = preset_args
+        self.kwargs = preset_kwargs
         self.loop = loop or current_loop.get()
         assert self.loop, "No koiled Loop found"
         self.task = None
@@ -48,17 +51,23 @@ class KoilTask(Generic[T, P]):
             assert inspect.iscoroutinefunction(coro), "Task is not a coroutine"
 
     def run(self, *args: P.args, **kwargs: P.kwargs):
+        assert self.future is None, "Task is already running"
         args = self.args + args
         kwargs = {**self.kwargs, **kwargs}
-        self.future = run_threaded_with_context(self.coro(*args, **kwargs), self.loop)
+        self.cancel_event = threading.Event()
+        self.future = run_threaded_with_context(
+            self.coro(*args, **kwargs), self.loop, self.cancel_event
+        )
 
         return self
 
     def done(self):
+        assert self.future, "Task was never run! Please run task before"
         return self.future.done()
 
     def cancel(self):
-        self.future.cancel()
+        assert not self.future.done(), "Task was never run! Please run task before"
+        self.cancel_event.set()
 
     def result(self) -> T:
         assert self.future, "Task was never run! Please run task before"

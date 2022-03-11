@@ -54,6 +54,7 @@ def run_threaded_event_loop(loop):
                 task.cancel()
 
             async def gather():
+                logger.debug(f"Cancelling {tasks}")
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             loop.run_until_complete(gather())
@@ -71,6 +72,7 @@ def run_threaded_event_loop(loop):
             if hasattr(loop, "shutdown_asyncgens"):
                 loop.run_until_complete(loop.shutdown_asyncgens())
         finally:
+            logger.debug("Loop Sucessfully Closed")
             loop.close()
 
 
