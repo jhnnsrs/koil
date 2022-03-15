@@ -29,6 +29,7 @@ pydoc-markdown = "^4.5.1"
 pytest-qt = "^4.0.2"
 PyQt5 = "^5.15.6"
 QtPy = "^2.0.1"
+pydantic = "^1.9.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

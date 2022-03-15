@@ -72,7 +72,7 @@ async def test_async():
     async with Koil():
         async with X(1) as x:
             x = asyncio.create_task(x.t())
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.02)
             x.cancel()
             try:
                 x = await x
