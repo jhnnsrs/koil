@@ -7,6 +7,11 @@ sidebar_label: "Introduction"
 
 Let's discover **Koil in less than 5 minutes**.
 
+:::warning
+Koil is very experimental at this point
+
+:::
+
 ### Inspiration
 
 koil is an abstraction layer for threaded asyncio to enable "sensible defaults" for

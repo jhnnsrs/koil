@@ -41,9 +41,17 @@ def koilable(
             getattr(self, fieldname).__exit__(None, None, None)
             setattr(self, fieldname, None)
 
+        async def adisconnect(self):
+            return await self.__aexit__(None, None, None)
+
+        async def aconnect(self):
+            return await self.__aenter__()
+
         cls.__enter__ = koiled_enter
         cls.__exit__ = koiled_exit
         if add_connectors:
+            cls.adisconnect = adisconnect
+            cls.aconnect = aconnect
             cls.disconnect = disconnect
             cls.connect = koiled_enter
 
