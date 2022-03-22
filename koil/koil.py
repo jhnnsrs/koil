@@ -4,6 +4,8 @@ import os
 import sys
 import threading
 from typing import Optional, Type
+
+from pydantic import BaseModel, Field
 from koil.errors import ContextError
 from koil.vars import *
 from koil.task import KoilGeneratorTask, KoilTask

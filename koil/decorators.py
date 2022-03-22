@@ -7,7 +7,10 @@ T = TypeVar("T")
 
 
 def koilable(
-    fieldname: str = "__koil", add_connectors: bool = False, **koilparams
+    fieldname: str = "__koil",
+    add_connectors: bool = False,
+    koil_class: Type[Koil] = Koil,
+    **koilparams
 ) -> Callable[[Type[T]], Type[T]]:
     """
     Decorator to make an async generator koilable.
@@ -27,7 +30,7 @@ def koilable(
         ), "__aexit__ must be a coroutine"
 
         def koiled_enter(self, *args, **kwargs):
-            setattr(self, fieldname, Koil(**koilparams))
+            setattr(self, fieldname, koil_class(**koilparams))
             getattr(self, fieldname).__enter__()
             return unkoil(self.__aenter__, *args, **kwargs)
 
