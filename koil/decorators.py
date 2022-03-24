@@ -2,6 +2,7 @@ from koil.helpers import unkoil
 from koil.koil import Koil
 import inspect
 from typing import Callable, Type, TypeVar
+from koil.vars import current_loop
 
 T = TypeVar("T")
 
@@ -30,18 +31,25 @@ def koilable(
         ), "__aexit__ must be a coroutine"
 
         def koiled_enter(self, *args, **kwargs):
-            setattr(self, fieldname, koil_class(**koilparams))
-            getattr(self, fieldname).__enter__()
+            if current_loop.get() is None:
+                if getattr(self, fieldname, None) is None:
+                    setattr(self, fieldname, koil_class(**koilparams))
+                getattr(self, fieldname).__enter__()
+
             return unkoil(self.__aenter__, *args, **kwargs)
 
         def koiled_exit(self, *args, **kwargs):
             unkoil(self.__aexit__, *args, **kwargs)
-            getattr(self, fieldname).__exit__(*args, **kwargs)
+            koil = getattr(self, fieldname, None)
+            if koil is not None:
+                koil.__exit__(None, None, None)
             setattr(self, fieldname, None)
 
         def disconnect(self):
             unkoil(self.__aexit__, None, None, None)
-            getattr(self, fieldname).__exit__(None, None, None)
+            koil = getattr(self, fieldname, None)
+            if koil is not None:
+                koil.__exit__(None, None, None)
             setattr(self, fieldname, None)
 
         async def adisconnect(self):

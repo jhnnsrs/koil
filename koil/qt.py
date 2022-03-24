@@ -2,6 +2,7 @@ import asyncio
 from asyncio.futures import Future
 import contextvars
 import inspect
+import threading
 from typing import Callable, Generic, TypeVar
 from qtpy import QtGui
 from qtpy.QtCore import QObject, Signal, QThread
@@ -12,8 +13,9 @@ from qtpy import QtWidgets
 from qtpy import QtCore
 from concurrent import futures
 from typing_extensions import ParamSpec, final
-from koil.task import KoilGeneratorTask, KoilTask
-
+from koil.task import KoilFuture, KoilGeneratorTask, KoilTask
+from koil.utils import run_threaded_with_context_and_signals
+from koil.vars import current_loop
 
 logger = logging.getLogger(__name__)
 
@@ -119,37 +121,30 @@ class QtTask(KoilTask, QtCore.QObject):
         super().__init__(*args, **kwargs)
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
 
-    def on_returnedwithoutcontext(self, obj, context):
-        for ctx, value in context.items():
+    def on_returnedwithoutcontext(self, res, ctxs):
+        for ctx, value in ctxs.items():
             ctx.set(value)
+        self.returned.emit(res)
 
-        self.returned.emit(obj)
+    def run(self, *args: P.args, **kwargs: P.kwargs):
+        args = self.args + args
+        kwargs = {**self.kwargs, **kwargs}
+        cancel_event = threading.Event()
+        loop = current_loop.get()
+        assert loop is not None, "No loop found"
+        assert loop.is_running(), "Loop is not running"
 
-    async def wrapped_future(self, args, kwargs, context):
-        try:
-            for ctx, value in context.items():
-                ctx.set(value)
-
-            args = self.args + args
-            kwargs = {**self.kwargs, **kwargs}
-            i = await self.coro(*args, **kwargs)
-            newcontext = contextvars.copy_context()
-            self._returnedwithoutcontext.emit(i, newcontext)
-        except Exception as e:
-            logger.error(
-                f"Error in task of coroutine {self.coro.__name__}", exc_info=True
-            )
-            self.errored.emit(e)
-        except asyncio.CancelledError:
-            self.cancelled.emit()
-
-    def run(self, *args, **kwargs):
-
-        ctxs = contextvars.copy_context()
-        future = asyncio.run_coroutine_threadsafe(
-            self.wrapped_future(args, kwargs, ctxs), self.loop
+        future = run_threaded_with_context_and_signals(
+            self.coro,
+            loop,
+            cancel_event,
+            self._returnedwithoutcontext,
+            self.errored,
+            self.cancelled,
+            *args,
+            **kwargs,
         )
-        return future
+        return KoilFuture(future, cancel_event, self)
 
 
 class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
@@ -177,7 +172,6 @@ class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
             args = self.args + args
             kwargs = {**self.kwargs, **kwargs}
             async for i in self.iterator(*args, **kwargs):
-
                 newcontext = contextvars.copy_context()
                 self._yieldedwithoutcontext.emit(i, newcontext)
         except Exception as e:
@@ -186,10 +180,11 @@ class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
             self.cancelled.emit()
 
     def run(self, *args, **kwargs):
+        loop = current_loop.get()
         ctxs = contextvars.copy_context()
 
         future = asyncio.run_coroutine_threadsafe(
-            self.wrapped_future(args, kwargs, ctxs), self.loop
+            self.wrapped_future(args, kwargs, ctxs), loop
         )
         return future
 

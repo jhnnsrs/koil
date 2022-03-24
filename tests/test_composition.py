@@ -2,10 +2,12 @@ from koil.composition import Composition
 import asyncio
 from koil import koilable, unkoilable
 from pydantic import BaseModel, Field
+from koil.composition.base import KoiledModel
+
+from koil.helpers import unkoil
 
 
-@koilable()
-class Kant(BaseModel):
+class Kant(KoiledModel):
     connected: bool = False
 
     async def __aenter__(self):
@@ -17,14 +19,15 @@ class Kant(BaseModel):
         self.connected = False
 
 
-@koilable()
-class Tan(BaseModel):  #
+class Tan(KoiledModel):  #
     x: int = 3
 
-    @unkoilable
-    async def run(self):
+    async def arun(self):
         await asyncio.sleep(0.02)
         return self.x
+
+    def run(self):
+        return unkoil(self.arun)
 
     async def __aenter__(self):
         await asyncio.sleep(0.002)
@@ -58,6 +61,8 @@ async def test_composition_api_async():
     assert app.tan.x == 3, "tan.x should be 3"
     async with app:
         assert app.kant.connected, "kant should be connected"
-        assert await app.tan.run() == 4, "tan.x should be 4 because it was set in enter"
+        assert (
+            await app.tan.arun() == 4
+        ), "tan.x should be 4 because it was set in enter"
 
     assert not app.kant.connected, "kant should be disconnected"

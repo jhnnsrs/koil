@@ -1,12 +1,11 @@
 import asyncio
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 from koil.decorators import koilable
 from typing import Optional, Type, TypeVar
-
-from koil.koil import Koil
 from koil.task import KoilGeneratorTask, KoilTask
 from koil.vars import *
+from koil.errors import *
 from koil.koil import *
 
 T = TypeVar("T")
@@ -16,15 +15,45 @@ class PedanticKoil(BaseModel):
     name: str = "KoilLoop"
     uvify: bool = True
     grace_period: Optional[float] = None
-    task_class: Optional[Type[KoilTask]] = Field(default=lambda: KoilTask, exclude=True)
+    task_class: Optional[Type[KoilTask]] = Field(default=KoilTask, exclude=True)
     gen_class: Optional[Type[KoilGeneratorTask]] = Field(
-        default=lambda: KoilGeneratorTask, exclude=True
+        default=KoilGeneratorTask, exclude=True
     )
+    grant_sync = True
 
     _entered_loop: asyncio.BaseEventLoop = None
     _old_loop: asyncio.BaseEventLoop = None
     _old_taskclass: Type[KoilTask] = None
     _old_genclass: Type[KoilGeneratorTask] = None
+
+    @root_validator()
+    def check_not_running_in_loop(cls, values):
+        if current_loop.get() is not None:
+            raise ValueError(
+                "You are already running in a Koil Loop. You cannot run a Koil Loop inside another Koil Loop."
+            )
+        try:
+            asyncio.get_running_loop()
+            if not values["grant_sync"]:
+                raise ValueError(
+                    "Please use async instead. Or set Koil to grant_sync=True"
+                )
+        except RuntimeError:
+            pass
+
+        return values
+
+    def connect(self):
+        return self.__enter__()
+
+    async def aconnect(self):
+        return self.__aenter__()
+
+    def disconnect(self):
+        return self.__exit__(None, None, None)
+
+    async def adisconnect(self):
+        return self.__aexit__(None, None, None)
 
     async def __aenter__(self):
         self._old_loop = current_loop.get()
@@ -38,9 +67,10 @@ class PedanticKoil(BaseModel):
     def __enter__(self):
         try:
             asyncio.get_running_loop()
-            raise ContextError(
-                "You are running in an event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
-            )
+            if not self.grant_sync:
+                raise ContextError(
+                    "You are running in an event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
+                )
         except RuntimeError:
             pass
 
@@ -70,19 +100,20 @@ class PedanticKoil(BaseModel):
     def __exit__(self, exc_type, exc_val, exc_tb):
 
         if self._entered_loop is not None:
-            asyncio.run_coroutine_threadsafe(self.aclose(), self._entered_loop)
+            if self._entered_loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.aclose(), self._entered_loop)
 
-            iterations = 0
+                iterations = 0
 
-            while self._entered_loop.is_running():
-                time.sleep(0.001)
-                iterations += 1
-                if iterations == 100:
-                    logger.warning(
-                        "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
-                    )
+                while self._entered_loop.is_running():
+                    time.sleep(0.001)
+                    iterations += 1
+                    if iterations == 100:
+                        logger.warning(
+                            "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
+                        )
 
-            current_loop.set(self._old_loop)  # Reset the loop
+                current_loop.set(self._old_loop)  # Reset the loop
 
         current_taskclass.set(self._old_taskclass)
         current_taskclass.set(self._old_genclass)
@@ -97,6 +128,18 @@ class KoiledModel(BaseModel):
     koil: Optional[PedanticKoil]
 
     def __enter__(self: T) -> T:
+        ...
+
+    def connect(self: T) -> T:
+        ...
+
+    async def aconnect(self: T) -> T:
+        ...
+
+    def disconnect(self: T):
+        ...
+
+    async def adisconnect(self: T):
         ...
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -127,3 +170,10 @@ class Composition(KoiledModel):
                 continue  # that was entered before
             if hasattr(value, "__aexit__"):
                 await value.__aexit__(exc_type, exc_val, exc_tb)
+
+    def _repr_html_(self):
+        return (
+            "<div><p>App</p><table>"
+            + "\n".join(["<tr><td>{}</td></tr>".format(key) for key, value in self])
+            + "</table></div>"
+        )

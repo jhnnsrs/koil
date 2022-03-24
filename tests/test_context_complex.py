@@ -17,10 +17,12 @@ class T(object):
     def __init__(self) -> None:
         pass
 
-    @unkoilable
     async def a(self, a):
         await asyncio.sleep(1)
         return 5
+
+    def t(self, a):
+        return unkoil(self.a, a)
 
     async def __aenter__(self):
         return self

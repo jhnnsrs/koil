@@ -93,12 +93,15 @@ def get_threaded_loop(name="KoilLoop", uvify=True):
 class Koil:
     def __init__(
         self,
+        *args,
         name="Koiloop",
         grace_period=None,
         uvify=True,
         task_class: Optional[Type[KoilTask]] = None,
         gen_class: Optional[Type[KoilGeneratorTask]] = None,
+        **kwargs,
     ) -> None:
+        super().__init__(*args, **kwargs)
         self.it = "it"
         self.name = name
         self.task_class = task_class
@@ -141,6 +144,7 @@ class Koil:
 
         self.popped_loop = get_threaded_loop(self.name, uvify=self.uvify)
         current_loop.set(self.popped_loop)
+        current_koil.set(self)
         return self
 
     async def aclose(self):
@@ -167,3 +171,12 @@ class Koil:
 
         current_taskclass.set(self.old_taskclass)
         current_taskclass.set(self.old_genclass)
+        current_koil.set(None)
+
+
+def create_task(coro, *args, **kwargs):
+    return coro(*args, **kwargs, as_task=True).run()
+
+
+def create_runner(coro, *args, **kwargs):
+    return coro(*args, **kwargs, as_task=True).run()
