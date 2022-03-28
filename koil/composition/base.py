@@ -1,9 +1,9 @@
 import asyncio
 from pydantic import BaseModel, Field, root_validator
+from pydantic.dataclasses import dataclass
 
 from koil.decorators import koilable
 from typing import Optional, Type, TypeVar
-from koil.task import KoilGeneratorTask, KoilTask
 from koil.vars import *
 from koil.errors import *
 from koil.koil import *
@@ -11,26 +11,22 @@ from koil.koil import *
 T = TypeVar("T")
 
 
-class PedanticKoil(BaseModel):
+class PedanticKoil(BaseModel, KoilMixin):
+    creating_instance: Optional[Any] = Field(default=None, exclude=True)
+    running: bool = False
     name: str = "KoilLoop"
     uvify: bool = True
     grace_period: Optional[float] = None
-    task_class: Optional[Type[KoilTask]] = Field(default=KoilTask, exclude=True)
-    gen_class: Optional[Type[KoilGeneratorTask]] = Field(
-        default=KoilGeneratorTask, exclude=True
-    )
     grant_sync = True
 
-    _entered_loop: asyncio.BaseEventLoop = None
-    _old_loop: asyncio.BaseEventLoop = None
-    _old_taskclass: Type[KoilTask] = None
-    _old_genclass: Type[KoilGeneratorTask] = None
+    _token = None
+    _loop = None
 
     @root_validator()
-    def check_not_running_in_loop(cls, values):
+    def check_not_running_in_koil(cls, values):
         if current_loop.get() is not None:
             raise ValueError(
-                "You are already running in a Koil Loop. You cannot run a Koil Loop inside another Koil Loop."
+                f"You are already running in a Koil Loop. You cannot run a Koil Loop inside another Koil Loop. {current_loop.get()}"
             )
         try:
             asyncio.get_running_loop()
@@ -43,83 +39,8 @@ class PedanticKoil(BaseModel):
 
         return values
 
-    def connect(self):
-        return self.__enter__()
-
-    async def aconnect(self):
-        return self.__aenter__()
-
-    def disconnect(self):
-        return self.__exit__(None, None, None)
-
-    async def adisconnect(self):
-        return self.__aexit__(None, None, None)
-
-    async def __aenter__(self):
-        self._old_loop = current_loop.get()
-        loop = asyncio.get_event_loop()
-        current_loop.set(loop)
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        current_loop.set(self._old_loop)
-
-    def __enter__(self):
-        try:
-            asyncio.get_running_loop()
-            if not self.grant_sync:
-                raise ContextError(
-                    "You are running in an event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
-                )
-        except RuntimeError:
-            pass
-
-        self._old_loop = current_loop.get()
-        self._old_taskclass = current_taskclass.get()
-        self._old_genclass = current_genclass.get()
-
-        current_taskclass.set(
-            self.task_class or self._old_taskclass or KoilTask
-        )  # task classes can be overwriten, as they only apply to the context
-        current_genclass.set(
-            self.gen_class or self._old_genclass or KoilGeneratorTask
-        )  # task classes can be overwriten, as they only apply to the context
-        if self._old_loop is not None:
-            # already runnning with a koiled loop, we will just attach to it
-            return self
-
-        self._entered_loop = get_threaded_loop(self.name, uvify=self.uvify)
-        current_loop.set(self._entered_loop)
-        return self
-
-    async def aclose(self):
-        loop = asyncio.get_event_loop()
-        logger.debug("Causing loop to stop")
-        loop.stop()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-
-        if self._entered_loop is not None:
-            if self._entered_loop.is_running():
-                asyncio.run_coroutine_threadsafe(self.aclose(), self._entered_loop)
-
-                iterations = 0
-
-                while self._entered_loop.is_running():
-                    time.sleep(0.001)
-                    iterations += 1
-                    if iterations == 100:
-                        logger.warning(
-                            "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
-                        )
-
-                current_loop.set(self._old_loop)  # Reset the loop
-
-        current_taskclass.set(self._old_taskclass)
-        current_taskclass.set(self._old_genclass)
-
     class Config:
-        arbitraty_types_allowed = True
+        arbitrary_types_allowed = True
         underscore_attrs_are_private = True
 
 

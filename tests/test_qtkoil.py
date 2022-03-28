@@ -1,14 +1,6 @@
 import asyncio
-from async_timeout import timeout
-
-import pytest
-from koil.errors import ContextError
-
-from koil.helpers import unkoil
-from .context import AsyncContextManager
-from koil import Koil
 from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtCoro, QtFuture, QtGeneratorTask, QtKoil, QtTask
+from koil.qt import QtCoro, QtFuture, QtGeneratorRunner, QtKoil, QtRunner
 import contextvars
 
 x = contextvars.ContextVar("x")
@@ -39,7 +31,8 @@ async def sleep_and_yield(times=5):
 class KoiledWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.koil = QtKoil()
+        self.koil = QtKoil(parent=self)
+        self.koil.connect()
 
         self.button_greet = QtWidgets.QPushButton("Greet")
         self.greet_label = QtWidgets.QLabel("")
@@ -59,23 +52,24 @@ class KoiledWidget(QtWidgets.QWidget):
 class KoiledInterferingWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.koil = QtKoil()
+        self.koil = QtKoil(parent=self)
+        self.koil.connect()
 
         self.call_task_button = QtWidgets.QPushButton("Call Task")
         self.call_gen_button = QtWidgets.QPushButton("Call Generator")
         self.call_raise_button = QtWidgets.QPushButton("Call Raise")
         self.call_context_button = QtWidgets.QPushButton("Call Context")
 
-        self.sleep_and_resolve_task = QtTask(sleep_and_resolve)
+        self.sleep_and_resolve_task = QtRunner(sleep_and_resolve)
         self.sleep_and_resolve_task.returned.connect(self.task_finished)
 
-        self.sleep_and_use_context_task = QtTask(sleep_and_use_context)
+        self.sleep_and_use_context_task = QtRunner(sleep_and_use_context)
         self.sleep_and_use_context_task.returned.connect(self.task_finished)
 
-        self.sleep_and_yield_task = QtGeneratorTask(sleep_and_yield)
+        self.sleep_and_yield_task = QtGeneratorRunner(sleep_and_yield)
         self.sleep_and_yield_task.yielded.connect(self.task_finished)
 
-        self.sleep_and_raise_task = QtTask(sleep_and_raise)
+        self.sleep_and_raise_task = QtRunner(sleep_and_raise)
         self.sleep_and_resolve_task.returned.connect(self.task_finished)
 
         self.greet_label = QtWidgets.QLabel("")
@@ -113,11 +107,12 @@ class KoiledInterferingWidget(QtWidgets.QWidget):
 class KoiledInterferingFutureWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.koil = QtKoil()
+        self.koil = QtKoil(parent=self)
+        self.koil.connect()
 
         self.do_me = QtCoro(self.in_qt_task)
 
-        self.my_coro_task = QtTask(self.call_coro)
+        self.my_coro_task = QtRunner(self.call_coro)
         self.my_coro_task.returned.connect(self.task_finished)
 
         self.task_was_run = False
@@ -152,7 +147,7 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
         print("nana")
 
 
-def test_no_interference(qtbot):
+def test_koil_qt_no_interference(qtbot):
     """Tests if just adding koil interferes with normal
     qtpy widgets.
 
@@ -168,7 +163,7 @@ def test_no_interference(qtbot):
     assert widget.greet_label.text() == "Hello!"
 
 
-def test_call_task(qtbot):
+def test_koil_qt_call_task(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
     qtbot.addWidget(widget)

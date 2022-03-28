@@ -1,45 +1,23 @@
-from pydantic import Field
+from inflection import underscore
+from pydantic import Field, dataclasses
+from pydantic.dataclasses import dataclass
 from koil.composition.base import PedanticKoil
-
 from typing import Optional, Type, TypeVar
+from koil.koil import KoilMixin
 
-from koil.qt import QtFuture, QtGeneratorTask, QtTask
+from koil.qt import QtFuture, QtGeneratorRunner, QtKoilMixin, QtRunner, WrappedObject
 from qtpy import QtWidgets, QtCore
 import logging
+
+from koil.task import KoilFuture
 
 logger = logging.getLogger(__name__)
 
 
-class WrappedObject(QtCore.QObject):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+class QtPedanticKoil(PedanticKoil, QtKoilMixin):
+    parent: QtWidgets.QWidget = Field(exclude=True)
 
-    def set_koil(self, koil: PedanticKoil):
-        self.koil = koil
-
-    def close(self):
-        self.koil.__exit__(None, None, None)
-
-
-class QtPedanticKoil(PedanticKoil):
-    disconnect_on_close = True
-    task_class: Optional[Type[QtTask]] = Field(default=QtTask, exclude=True)
-    gen_class: Optional[Type[QtGeneratorTask]] = Field(
-        default=QtGeneratorTask, exclude=True
-    )
-    qobject: WrappedObject = Field(default_factory=WrappedObject)
-
-    def __enter__(self):
-        self.qobject.set_koil(self)
-        ap_instance = QtWidgets.QApplication.instance()
-        if ap_instance is None:
-            raise NotImplementedError("Qt Application not found")
-        if self.disconnect_on_close:
-            ap_instance.lastWindowClosed.connect(self.qobject.close)
-        return super().__enter__()
-
-    class Config:
-        arbitrary_types_allowed = True
+    _qobject: QtCore.QObject = None
 
     def create_task(self, coro, *args, **kwargs) -> QtFuture:
         logger.warning(
@@ -48,5 +26,9 @@ class QtPedanticKoil(PedanticKoil):
         )
         return coro(*args, **kwargs, as_task=True).run()
 
-    def create_runner(self, coro, *args, **kwargs) -> QtTask:
+    def create_runner(self, coro, *args, **kwargs) -> QtRunner:
         return coro(*args, **kwargs, as_task=True)
+
+    class Config:
+        underscore_attrs_are_private = True
+        arbitrary_types_allowed = True

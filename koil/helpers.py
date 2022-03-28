@@ -9,19 +9,24 @@ from koil.errors import (
     KoilStopIteration,
     ThreadCancelledError,
 )
+from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
 from koil.vars import *
-from koil.task import KoilTask
 import time
 
 
-def create_task(coro, *args, **kwargs) -> KoilTask:
-    """Create a coil task from a coroutine"""
-    return coro(*args, **kwargs, as_task=True)
+def unkoil_gen(iterator, *args, **kwargs):
+    try:
+        loop0 = asyncio.events.get_running_loop()
+        # We are running inside a loop
+        # TODO: CHeck if iterator self has a loop attribute, if so, check if it is the same loop
+        return iterator(*args, **kwargs)
+    except RuntimeError:
+        pass
 
-
-def unkoil_gen(iterator, *args, timeout=None, **kwargs):
     loop = current_loop.get()
+    assert loop, "No koiled loop found"
+
     cancel_event = current_cancel_event.get() or threading.Event()
 
     if loop.is_closed():
@@ -37,10 +42,13 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
     res = [False, False]
     next_args = None
 
-    async def next_on_ait(*inside_args):
+    async def next_on_ait(inside_args):
         try:
             try:
-                obj = await ait.__anext__(*inside_args)
+                if inside_args:
+                    obj = await ait.__anext__(*inside_args)
+                else:
+                    obj = await ait.__anext__()
                 return [False, obj]
             except StopAsyncIteration:
                 return [True, None]
@@ -48,9 +56,7 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
             return [False, e]
 
     while True:
-        res = run_threaded_with_context(
-            next_on_ait, loop, cancel_event, *args, **kwargs
-        )
+        res = run_threaded_with_context(next_on_ait, loop, cancel_event, next_args)
         x, context = res.result()
         done, obj = x
         if done:
@@ -64,13 +70,12 @@ def unkoil_gen(iterator, *args, timeout=None, **kwargs):
         next_args = yield obj
 
 
-def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwargs):
+def unkoil(coro, *args, **kwargs):
     try:
         loop = asyncio.events.get_running_loop()
-        if loop == current_loop.get():
-            return coro(*args, **kwargs)
-        else:
-            raise NotImplementedError("TRying different stuff")
+        return coro(
+            *args, **kwargs
+        )  # We are running in an event loop so we can just return the coroutine
 
     except RuntimeError:
         pass
@@ -79,11 +84,6 @@ def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwar
     cancel_event = current_cancel_event.get()
 
     if loop:
-        if as_task:
-            taskclass = current_taskclass.get()
-            assert taskclass is not None, "No task class set"
-            return taskclass(coro, preset_args=args, preset_kwargs=kwargs)
-
         try:
             if loop.is_closed():
                 raise RuntimeError("Loop is not running")
@@ -114,19 +114,10 @@ def unkoil(coro, *args, timeout=None, as_task=False, ensure_koiled=False, **kwar
         except KeyboardInterrupt:
             print("Grace period triggered?")
             raise
-    else:
-        if ensure_koiled:
-            raise RuntimeError("No loop set and ensure_koiled was set to True")
 
-        elif as_task:
-            raise RuntimeError(
-                """No loop is running. That means you cannot have this run as a task. Try providing a loop by entering a Koil() context.
-                """
-            )
-        else:
-            raise NotImplementedError(
-                f"You need to be in a Koil() context to use sync() {coro} {loop}"
-            )
+    raise NotImplementedError(
+        f"You need to be in a Koil() context to use sync() {coro} {loop}"
+    )
 
 
 async def run_spawned(
@@ -149,7 +140,6 @@ async def run_spawned(
             assert loop0 is loop, "Loop is not the same"
         else:
             loop = loop0
-            current_taskclass.set(KoilTask)
     except RuntimeError:
         loop = current_loop.get()
 
@@ -159,7 +149,6 @@ async def run_spawned(
     def wrapper(sync_args, sync_kwargs, loop, cancel_event, context):
         if pass_loop:
             current_loop.set(loop)
-            current_taskclass.set(KoilTask)
 
         current_cancel_event.set(cancel_event)
 
@@ -215,7 +204,6 @@ async def iterate_spawned(
             assert loop0 is loop, "Loop is not the same"
         else:
             loop = loop0
-            current_taskclass.set(KoilTask)
     except RuntimeError:
         loop = current_loop.get()
 
@@ -237,7 +225,6 @@ async def iterate_spawned(
     ):
         if pass_loop:
             current_loop.set(loop)
-            current_taskclass.set(KoilTask)
 
         current_cancel_event.set(cancel_event)
 
@@ -302,3 +289,11 @@ async def iterate_spawned(
                 raise finish_condition
             except KoilStopIteration:
                 break
+
+
+def create_task(coro, *args, **kwargs) -> KoilFuture:
+    return KoilRunner(coro, preset_args=args, preset_kwargs=kwargs).run()
+
+
+def create_runner(coro, *args, **kwargs) -> KoilRunner:
+    return KoilRunner(coro, preset_args=args, preset_kwargs=kwargs)

@@ -1,14 +1,15 @@
 import asyncio
 from contextlib import contextmanager
+from dataclasses import dataclass
 import os
 import sys
 import threading
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 from pydantic import BaseModel, Field
 from koil.errors import ContextError
 from koil.vars import *
-from koil.task import KoilGeneratorTask, KoilTask
+from koil.task import KoilFuture, KoilRunner
 import time
 import logging
 
@@ -87,96 +88,92 @@ def get_threaded_loop(name="KoilLoop", uvify=True):
     th.daemon = True
     th.start()
 
+    newloop.name = name
+
     return newloop
 
 
-class Koil:
-    def __init__(
-        self,
-        *args,
-        name="Koiloop",
-        grace_period=None,
-        uvify=True,
-        task_class: Optional[Type[KoilTask]] = None,
-        gen_class: Optional[Type[KoilGeneratorTask]] = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self.it = "it"
-        self.name = name
-        self.task_class = task_class
-        self.gen_class = gen_class
-        self.loop = None
-        self.popped_loop = None
-        self.uvify = uvify
+class KoilMixin:
+    def disconnect(self):
+        return self.__exit__(None, None, None)
+
+    async def adisconnect(self):
+        return await self.__aexit__(None, None, None)
+
+    async def aconnect(self):
+        return await self.__aenter__()
+
+    def connect(self):
+        return self.__enter__()
+
+    async def adisconnect(self):
+        return await self.__aexit__(None, None, None)
 
     async def __aenter__(self):
-        self.old_loop = current_loop.get()
-        loop = asyncio.get_event_loop()
-        current_loop.set(loop)
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        current_loop.set(self.old_loop)
+    async def __aexit__(self, *args, **kwargs):
+        pass
 
     def __enter__(self):
         try:
             asyncio.get_running_loop()
             raise ContextError(
-                "You are running in an event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
+                "You are running in asyncio event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
             )
         except RuntimeError:
             pass
 
-        self.old_loop = current_loop.get()
-        self.old_taskclass = current_taskclass.get()
-        self.old_genclass = current_genclass.get()
-
-        current_taskclass.set(
-            self.task_class or self.old_taskclass or KoilTask
-        )  # task classes can be overwriten, as they only apply to the context
-        current_genclass.set(
-            self.gen_class or self.old_genclass or KoilGeneratorTask
-        )  # task classes can be overwriten, as they only apply to the context
-        if self.old_loop is not None:
-            # already runnning with a koiled loop, we will just attach to it
-            return self
-
-        self.popped_loop = get_threaded_loop(self.name, uvify=self.uvify)
-        current_loop.set(self.popped_loop)
-        current_koil.set(self)
+        self._loop = current_loop.get()
+        assert (
+            self._loop is None
+        ), f"You are already in a koiled context. You can't nest koiled contexts. Omit creating a new Koil here {self._loop.name}"
+        # We are now creating a koiled loop for this context
+        self._loop = get_threaded_loop(
+            getattr(
+                self,
+                "name",
+                f"KoiledLoop {'governed by' + self.creating_instance.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
+            ),
+            uvify=getattr(self, "uvify", True),
+        )
+        current_loop.set(self._loop)
+        self.running = True
         return self
 
-    async def aclose(self):
+    async def __aloop_close(self):
         loop = asyncio.get_event_loop()
         logger.debug("Causing loop to stop")
         loop.stop()
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args, **kwargs):
+        asyncio.run_coroutine_threadsafe(self.__aloop_close(), self._loop)
 
-        if self.popped_loop is not None:
-            asyncio.run_coroutine_threadsafe(self.aclose(), self.popped_loop)
+        iterations = 0
 
-            iterations = 0
+        while self._loop.is_running():
+            time.sleep(0.001)
+            iterations += 1
+            if iterations == 100:
+                logger.warning(
+                    "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
+                )
 
-            while self.popped_loop.is_running():
-                time.sleep(0.001)
-                iterations += 1
-                if iterations == 100:
-                    logger.warning(
-                        "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
-                    )
-
-            current_loop.set(self.old_loop)  # Reset the loop
-
-        current_taskclass.set(self.old_taskclass)
-        current_taskclass.set(self.old_genclass)
-        current_koil.set(None)
+        current_loop.set(None)
+        self.running = False
 
 
-def create_task(coro, *args, **kwargs):
-    return coro(*args, **kwargs, as_task=True).run()
+@dataclass
+class Koil(KoilMixin):
 
+    creating_instance: Optional[Any] = None
+    "The instance that created this class through entering"
 
-def create_runner(coro, *args, **kwargs):
-    return coro(*args, **kwargs, as_task=True).run()
+    uvify: bool = False
+    """Shoul we spawn a new thread for each task?"""
+
+    name: str = "KoilLoop"
+    """How would you like to name this loop"""
+
+    force_lonely: bool = False
+    pass

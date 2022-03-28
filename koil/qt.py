@@ -1,6 +1,7 @@
 import asyncio
 from asyncio.futures import Future
 import contextvars
+from dataclasses import dataclass, field
 import inspect
 import threading
 from typing import Callable, Generic, TypeVar
@@ -8,13 +9,21 @@ from qtpy import QtGui
 from qtpy.QtCore import QObject, Signal, QThread
 import uuid
 import logging
-from koil.koil import Koil
+from koil.koil import Koil, KoilMixin
 from qtpy import QtWidgets
 from qtpy import QtCore
 from concurrent import futures
 from typing_extensions import ParamSpec, final
-from koil.task import KoilFuture, KoilGeneratorTask, KoilTask
-from koil.utils import run_threaded_with_context_and_signals
+from koil.task import (
+    KoilFuture,
+    KoilGeneratorRunner,
+    KoilRunner,
+    KoilYieldFuture,
+)
+from koil.utils import (
+    iterate_threaded_with_context_and_signals,
+    run_threaded_with_context_and_signals,
+)
 from koil.vars import current_loop
 
 logger = logging.getLogger(__name__)
@@ -111,7 +120,8 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
             raise
 
 
-class QtTask(KoilTask, QtCore.QObject):
+class QtRunner(KoilRunner, QtCore.QObject):
+    started = QtCore.Signal()
     errored = QtCore.Signal(Exception)
     cancelled = QtCore.Signal()
     returned = QtCore.Signal(object)
@@ -129,25 +139,27 @@ class QtTask(KoilTask, QtCore.QObject):
     def run(self, *args: P.args, **kwargs: P.kwargs):
         args = self.args + args
         kwargs = {**self.kwargs, **kwargs}
-        cancel_event = threading.Event()
+
         loop = current_loop.get()
         assert loop is not None, "No loop found"
         assert loop.is_running(), "Loop is not running"
+        cancel_event = threading.Event()
 
         future = run_threaded_with_context_and_signals(
             self.coro,
             loop,
             cancel_event,
+            self.started,
             self._returnedwithoutcontext,
             self.errored,
             self.cancelled,
             *args,
             **kwargs,
         )
-        return KoilFuture(future, cancel_event, self)
+        return KoilFuture(future, cancel_event)
 
 
-class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
+class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
     errored = QtCore.Signal(Exception)
     cancelled = QtCore.Signal()
     yielded = QtCore.Signal(object)
@@ -180,39 +192,77 @@ class QtGeneratorTask(KoilGeneratorTask, QtCore.QObject):
             self.cancelled.emit()
 
     def run(self, *args, **kwargs):
+        args = self.args + args
+        kwargs = {**self.kwargs, **kwargs}
+        cancel_event = threading.Event()
         loop = current_loop.get()
-        ctxs = contextvars.copy_context()
+        assert loop is not None, "No loop found"
+        assert loop.is_running(), "Loop is not running"
 
-        future = asyncio.run_coroutine_threadsafe(
-            self.wrapped_future(args, kwargs, ctxs), loop
+        future = iterate_threaded_with_context_and_signals(
+            self.iterator,
+            loop,
+            cancel_event,
+            self._yieldedwithoutcontext,
+            self.errored,
+            self.cancelled,
+            self.done,
+            *args,
+            **kwargs,
         )
-        return future
+        return KoilYieldFuture(future, cancel_event)
 
 
-class QtKoil(Koil, QtCore.QObject):
-    def __init__(
-        self,
-        *args,
-        disconnect_on_close=True,
-        autoconnect=True,
-        parent=None,
-        uvify=False,
-        **kwargs,
-    ) -> None:
-        super().__init__(
-            *args, **kwargs, uvify=False, task_class=QtTask, gen_class=QtGeneratorTask
-        )
-        self.disconnect_on_close = disconnect_on_close
-        if autoconnect:
-            self.connect()
-
-    def close(self):
-        self.__exit__(None, None, None)
-
-    def connect(self):
+class QtKoilMixin(KoilMixin):
+    def __enter__(self):
+        super().__enter__()
+        self._qobject = WrappedObject(parent=self.parent, koil=self)
+        assert (
+            self._qobject.parent() is not None
+        ), "No parent found. Please provide a parent"
         ap_instance = QtWidgets.QApplication.instance()
         if ap_instance is None:
             raise NotImplementedError("Qt Application not found")
-        if self.disconnect_on_close:
-            ap_instance.lastWindowClosed.connect(self.close)
-        return self.__enter__()
+        return self
+
+
+class WrappedObject(QtCore.QObject):
+    def __init__(self, *args, koil: Koil = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.koil = koil
+        self._hooked_close_event = self.parent().closeEvent
+        self.parent().closeEvent = self.on_close_event
+        self.parent().destroyed.connect(self.destroyedEvent)
+
+    def on_close_event(self, event):
+        if self.koil.running:
+            self.koil.__exit__(None, None, None)
+        self._hooked_close_event(event)
+
+    def destroyedEvent(self):
+        if hasattr(self, "koil"):
+            if self.koil.running:
+                self.koil.__exit__(None, None, None)
+
+
+@dataclass
+class QtKoil(QtKoilMixin):
+    auto_enter = True
+    disconnect_on_close: bool = True
+    parent: QtWidgets.QWidget = None
+
+    def __post_init__(self):
+        self.name = self.parent.__class__.__name__
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def create_task(self, coro, *args, **kwargs) -> QtFuture:
+        logger.warning(
+            """Creating a task within the qt loop is not recommended. As this might lead to deathlocks and other bad things. (Especially when calling qt back from the koil). Try to use a `create_runner`
+            and connect your signals to and then call the `run` method instead."""
+        )
+        return coro(*args, **kwargs, as_task=True).run()
+
+    def create_runner(self, coro, *args, **kwargs) -> QtRunner:
+        return coro(*args, **kwargs, as_task=True)
