@@ -1,5 +1,5 @@
 from inflection import underscore
-from pydantic import Field, dataclasses
+from pydantic import Field, dataclasses, root_validator
 from pydantic.dataclasses import dataclass
 from koil.composition.base import PedanticKoil
 from typing import Optional, Type, TypeVar
@@ -18,6 +18,11 @@ class QtPedanticKoil(PedanticKoil, QtKoilMixin):
     parent: QtWidgets.QWidget = Field(exclude=True)
 
     _qobject: QtCore.QObject = None
+
+    @root_validator()
+    def check_not_running_in_koil(cls, values):
+        values["name"] = repr(values["parent"])
+        return values
 
     def create_task(self, coro, *args, **kwargs) -> QtFuture:
         logger.warning(
