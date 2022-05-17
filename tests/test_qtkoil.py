@@ -32,7 +32,7 @@ class KoiledWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.koil = QtKoil(parent=self)
-        self.koil.connect()
+        self.koil.enter()
 
         self.button_greet = QtWidgets.QPushButton("Greet")
         self.greet_label = QtWidgets.QLabel("")
@@ -53,7 +53,7 @@ class KoiledInterferingWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.koil = QtKoil(parent=self)
-        self.koil.connect()
+        self.koil.enter()
 
         self.call_task_button = QtWidgets.QPushButton("Call Task")
         self.call_gen_button = QtWidgets.QPushButton("Call Generator")
@@ -108,7 +108,7 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.koil = QtKoil(parent=self)
-        self.koil.connect()
+        self.koil.enter()
 
         self.do_me = QtCoro(self.in_qt_task)
 

@@ -94,19 +94,19 @@ def get_threaded_loop(name="KoilLoop", uvify=True):
 
 
 class KoilMixin:
-    def disconnect(self):
+    def exit(self):
         return self.__exit__(None, None, None)
 
-    async def adisconnect(self):
+    async def aexit(self):
         return await self.__aexit__(None, None, None)
 
-    async def aconnect(self):
+    async def aenter(self):
         return await self.__aenter__()
 
-    def connect(self):
+    def enter(self):
         return self.__enter__()
 
-    async def adisconnect(self):
+    async def aexit(self):
         return await self.__aexit__(None, None, None)
 
     async def __aenter__(self):

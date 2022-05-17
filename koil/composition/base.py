@@ -51,16 +51,16 @@ class KoiledModel(BaseModel):
     def __enter__(self: T) -> T:
         ...
 
-    def connect(self: T) -> T:
+    def enter(self: T) -> T:
         ...
 
-    async def aconnect(self: T) -> T:
+    async def aenter(self: T) -> T:
         ...
 
-    def disconnect(self: T):
+    def exit(self: T):
         ...
 
-    async def adisconnect(self: T):
+    async def aexit(self: T):
         ...
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

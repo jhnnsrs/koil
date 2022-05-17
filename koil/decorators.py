@@ -45,9 +45,12 @@ def koilable(
                     getattr(self, fieldname, None) is None
                 ), f"You cannot enter a koil loop inside another koil loop. Do no set explicitly a Koil in {cls}. Found koiled loop {potential_koiled_loop}"
             else:
-                setattr(
-                    self, fieldname, koil_class(creating_instance=self, **koilparams)
-                )
+                if getattr(self, fieldname, None) is None:
+                    setattr(
+                        self,
+                        fieldname,
+                        koil_class(creating_instance=self, **koilparams),
+                    )
                 getattr(self, fieldname).__enter__()
 
             return unkoil(self.__aenter__, *args, **kwargs)
@@ -59,22 +62,19 @@ def koilable(
                 koil.__exit__(None, None, None)
                 setattr(self, fieldname, None)
 
-        def disconnect(self):
-            return self.__exit__(None, None, None)
-
-        async def adisconnect(self):
+        async def aexit(self):
             return await self.__aexit__(None, None, None)
 
-        async def aconnect(self):
+        async def aenter(self):
             return await self.__aenter__()
 
         cls.__enter__ = koiled_enter
         cls.__exit__ = koiled_exit
         if add_connectors:
-            cls.adisconnect = adisconnect
-            cls.aconnect = aconnect
-            cls.disconnect = disconnect
-            cls.connect = koiled_enter
+            cls.aexit = aexit
+            cls.aenter = aenter
+            cls.exit = koiled_exit
+            cls.enter = koiled_enter
             cls.__get_koiled_loop = ___get_koiled_loop
 
         return cls
