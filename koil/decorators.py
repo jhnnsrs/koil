@@ -33,7 +33,7 @@ def koilable(
         ), "__aenter__ must be a coroutine"
         assert inspect.iscoroutinefunction(
             cls.__aexit__
-        ), "__aexit__ must be a coroutine"
+        ), "__aexit__ must be a coroutine (awaitable)"
 
         def ___get_koiled_loop(self):
             return getattr(self, fieldname)

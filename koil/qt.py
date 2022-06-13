@@ -49,6 +49,8 @@ class QtFuture:
         self.iscancelled = True
 
     def resolve(self, *args):
+        if not args:
+            args = (None,)
         ctx = contextvars.copy_context()
         self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,) + args)
 
