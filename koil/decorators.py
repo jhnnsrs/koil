@@ -60,7 +60,6 @@ def koilable(
             koil = getattr(self, fieldname, None)
             if koil is not None:
                 koil.__exit__(None, None, None)
-                setattr(self, fieldname, None)
 
         async def aexit(self):
             return await self.__aexit__(None, None, None)

@@ -18,6 +18,7 @@ class PedanticKoil(BaseModel, KoilMixin):
     uvify: bool = True
     grace_period: Optional[float] = None
     grant_sync = True
+    sync_in_async = False
 
     _token = None
     _loop = None
@@ -30,9 +31,9 @@ class PedanticKoil(BaseModel, KoilMixin):
             )
         try:
             asyncio.get_running_loop()
-            if not values["grant_sync"]:
+            if not values["sync_in_async"]:
                 raise ValueError(
-                    "Please use async instead. Or set Koil to grant_sync=True"
+                    "Please use async instead. Or set Koil to sync_in_async=True"
                 )
         except RuntimeError:
             pass
@@ -74,6 +75,7 @@ class KoiledModel(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+        extra = "forbid"
 
 
 class Composition(KoiledModel):

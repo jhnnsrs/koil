@@ -16,15 +16,15 @@ import time
 
 
 def unkoil_gen(iterator, *args, **kwargs):
+
+    loop = current_loop.get()
     try:
         loop0 = asyncio.events.get_running_loop()
-        # We are running inside a loop
-        # TODO: CHeck if iterator self has a loop attribute, if so, check if it is the same loop
-        return iterator(*args, **kwargs)
+        if not loop or loop0 == loop:
+            return iterator(*args, **kwargs)
     except RuntimeError:
         pass
 
-    loop = current_loop.get()
     assert loop, "No koiled loop found"
 
     cancel_event = current_cancel_event.get() or threading.Event()
@@ -71,11 +71,13 @@ def unkoil_gen(iterator, *args, **kwargs):
 
 
 def unkoil(coro, *args, **kwargs):
+    loop = current_loop.get()
     try:
-        loop = asyncio.events.get_running_loop()
-        return coro(
-            *args, **kwargs
-        )  # We are running in an event loop so we can just return the coroutine
+        loop0 = asyncio.events.get_running_loop()
+        if not loop or loop0 == loop:
+            return coro(
+                *args, **kwargs
+            )  # We are running in an event loop so we can just return the coroutine
 
     except RuntimeError:
         pass
@@ -157,16 +159,30 @@ async def run_spawned(
                 ctx.set(value)
 
         print("New thread spawned")
-        return sync_func(*sync_args, **sync_kwargs)
+        if sync_args:
+            return sync_func(*sync_args, **sync_kwargs)
+        else:
+            try:
+                return sync_func(**sync_kwargs)
+            except Exception as e:
+                print("Exception in thread", e)
+                raise e
 
     context = contextvars.copy_context() if pass_context else None
     cancel_event = threading.Event()
 
     f = loop.run_in_executor(
-        None, wrapper, sync_args, sync_kwargs, loop, cancel_event, context
+        executor,
+        wrapper,
+        sync_args if len(sync_args) > 0 else None,
+        sync_kwargs,
+        loop,
+        cancel_event,
+        context,
     )
     try:
-        return await asyncio.shield(f)
+        shielded_f = await asyncio.shield(f)
+        return shielded_f
     except asyncio.CancelledError as e:
         cancel_event.set()
 
@@ -252,7 +268,7 @@ async def iterate_spawned(
     context = contextvars.copy_context() if pass_context else None
 
     f = loop.run_in_executor(
-        None,
+        executor,
         wrapper,
         sync_args,
         sync_kwargs,

@@ -118,9 +118,10 @@ class KoilMixin:
     def __enter__(self):
         try:
             asyncio.get_running_loop()
-            raise ContextError(
-                "You are running in asyncio event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
-            )
+            if not hasattr(self, "sync_in_async") or self.sync_in_async is False:
+                raise ContextError(
+                    "You are running in asyncio event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
+                )
         except RuntimeError:
             pass
 
