@@ -46,7 +46,6 @@ class X(object):
             a = self.a("v")
             check_cancelled()
             t = yield a
-            print(t)
 
     @unkoilable
     async def a(self, a):

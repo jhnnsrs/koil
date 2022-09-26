@@ -75,7 +75,6 @@ class KoilFuture:
 
         for ctx, value in context.items():
             ctx.set(value)
-            print(ctx, value.__class__)
 
         return res
 
@@ -93,7 +92,6 @@ class KoilYieldFuture(KoilFuture):
 
         for ctx, value in context.items():
             ctx.set(value)
-            print(ctx, value.__class__)
 
         return res
 

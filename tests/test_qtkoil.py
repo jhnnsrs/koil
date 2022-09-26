@@ -1,6 +1,6 @@
 import asyncio
 from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtCoro, QtFuture, QtGeneratorRunner, QtKoil, QtRunner
+from koil.qt import QtCoro, QtFuture, QtGenerator, QtGeneratorRunner, QtKoil, QtRunner
 import contextvars
 
 x = contextvars.ContextVar("x")
@@ -24,7 +24,6 @@ async def sleep_and_use_context():
 async def sleep_and_yield(times=5):
     for i in range(times):
         await asyncio.sleep(0.1)
-        print(i)
         yield i
 
 
@@ -132,7 +131,6 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
     def in_qt_task(self, future: QtFuture):
         self.task_was_run = True
         future.resolve("called")
-        print("here")
 
     def call_task(self):
         self.my_coro_task.run()
@@ -141,7 +139,52 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
         self.greet_label.setText("Hello!")
 
     async def call_coro(self):
-        print(self)
+        x = await self.do_me.acall()
+        self.coroutine_was_run = True
+
+
+class KoiledGeneratorWidget(QtWidgets.QWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.koil = QtKoil(parent=self)
+        self.koil.enter()
+
+        self.my_coro_task = QtRunner(self.call_coro)
+        self.my_coro_task.returned.connect(self.task_finished)
+
+        self.task_was_run = False
+        self.coroutine_was_run = False
+        self.coroutine_finished = False
+
+        self.call_task_button = QtWidgets.QPushButton("Call Task")
+        self.greet_label = QtWidgets.QLabel("")
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.call_task_button)
+        layout.addWidget(self.greet_label)
+
+        self.setLayout(layout)
+
+        self.call_task_button.clicked.connect(self.call_task)
+
+    def in_qt_task(self, future: QtFuture):
+        self.task_was_run = True
+        future.resolve("called")
+
+    def call_task(self):
+        self.my_coro_task.run()
+
+    def task_finished(self):
+        self.greet_label.setText("Hello!")
+
+    async def call_coro(self):
+        self.qt_generator = QtGenerator()
+
+        async for x in self.qt_generator:
+            self.coroutine_was_run = True
+
+        self.coroutine_finished = True
+
         x = await self.do_me.acall()
         self.coroutine_was_run = True
         print("nana")
@@ -171,7 +214,6 @@ def test_koil_qt_call_task(qtbot):
     # click in the Greet button and make sure it updates the appropriate label
     with qtbot.waitSignal(widget.sleep_and_resolve_task.returned) as b:
         qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton)
-        print(b)
 
 
 def test_call_gen(qtbot):
@@ -183,7 +225,6 @@ def test_call_gen(qtbot):
     with qtbot.waitSignal(widget.sleep_and_yield_task.yielded, timeout=1000) as b:
 
         qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton)
-        print(b)
 
 
 def test_call_future(qtbot):

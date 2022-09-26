@@ -1,5 +1,4 @@
 import asyncio
-from asyncio.log import logger
 import threading
 
 import janus
@@ -13,6 +12,7 @@ from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
 from koil.vars import *
 import time
+import logging
 
 
 def unkoil_gen(iterator, *args, **kwargs):
@@ -114,7 +114,7 @@ def unkoil(coro, *args, **kwargs):
             return x
 
         except KeyboardInterrupt:
-            print("Grace period triggered?")
+            logging.info("Grace period triggered?")
             raise
 
     raise NotImplementedError(
@@ -158,14 +158,14 @@ async def run_spawned(
             for ctx, value in context.items():
                 ctx.set(value)
 
-        print("New thread spawned")
+        logging.debug("New thread spawned")
         if sync_args:
             return sync_func(*sync_args, **sync_kwargs)
         else:
             try:
                 return sync_func(**sync_kwargs)
             except Exception as e:
-                print("Exception in thread", e)
+                logging.info("Exception in thread", exc_info=True)
                 raise e
 
     context = contextvars.copy_context() if pass_context else None
@@ -189,8 +189,7 @@ async def run_spawned(
         try:
             await asyncio.wait_for(f, timeout=cancel_timeout)
         except ThreadCancelledError:
-            print("Thread was cancelled")
-            logger.info("Future in another thread was sucessfully cancelled")
+            logging.info("Future in another thread was sucessfully cancelled")
             pass
         except asyncio.TimeoutError as te:
             raise KoilError(
@@ -262,7 +261,7 @@ async def iterate_spawned(
             except StopIteration as e:
                 raise KoilStopIteration("Thread stopped")
             except Exception as e:
-                print(e)
+                logging.info("Exception in generator", exc_info=True)
                 raise e
 
     context = contextvars.copy_context() if pass_context else None
@@ -279,32 +278,41 @@ async def iterate_spawned(
         context,
     )
 
-    while True:
+    try:
+        while True:
 
-        it_task = asyncio.create_task(yield_queue.async_q.get())
+            it_task = asyncio.create_task(yield_queue.async_q.get())
+
+            finish, unfinished = await asyncio.wait(
+                [it_task, f], return_when=asyncio.FIRST_COMPLETED
+            )
+
+            finish_condition = False
+
+            for task in finish:
+                if task == f:
+                    if task.exception():
+                        finish_condition = task.exception()
+
+                else:
+                    yield_queue.async_q.task_done()
+                    x = yield task.result()
+                    await next_queue.async_q.put(x)
+
+            if finish_condition:
+                yield_queue.close()
+                try:
+                    raise finish_condition
+                except KoilStopIteration:
+                    break
+    except asyncio.CancelledError as e:
+        cancel_event.set()
 
         finish, unfinished = await asyncio.wait(
             [it_task, f], return_when=asyncio.FIRST_COMPLETED
         )
 
-        finish_condition = False
-
-        for task in finish:
-            if task == f:
-                if task.exception():
-                    finish_condition = task.exception()
-
-            else:
-                yield_queue.async_q.task_done()
-                x = yield task.result()
-                await next_queue.async_q.put(x)
-
-        if finish_condition:
-            yield_queue.close()
-            try:
-                raise finish_condition
-            except KoilStopIteration:
-                break
+        raise e
 
 
 def create_task(coro, *args, **kwargs) -> KoilFuture:

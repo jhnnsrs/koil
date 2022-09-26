@@ -58,6 +58,44 @@ class QtFuture:
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
 
 
+class KoilStopIteration(Exception):
+    pass
+
+
+class QtGenerator:
+    def __init__(self):
+        self.loop = asyncio.get_event_loop()
+        self.aioqueue = asyncio.Queue()
+        self.iscancelled = False
+
+    def _set_cancelled(self):
+        """WIll be called by the asyncio loop"""
+        self.iscancelled = True
+
+    def next(self, *args):
+        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, *args)
+
+    def throw(self, exception):
+        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, exception)
+
+    def stop(self):
+        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, KoilStopIteration())
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            res = await self.aioqueue.get()
+            if isinstance(res, KoilStopIteration):
+                raise StopAsyncIteration
+            if isinstance(res, Exception):
+                raise res
+        except asyncio.CancelledError:
+            raise StopAsyncIteration
+        return res
+
+
 T = TypeVar("T")
 P = ParamSpec("P")
 
@@ -213,6 +251,7 @@ class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
 class QtKoilMixin(KoilMixin):
     def __enter__(self):
         super().__enter__()
+        assert self.parent, "Parent must be set before entering the loop"
         self._qobject = WrappedObject(parent=self.parent, koil=self)
         assert (
             self._qobject.parent() is not None

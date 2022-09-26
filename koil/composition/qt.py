@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class QtPedanticKoil(PedanticKoil, QtKoilMixin):
-    parent: QtWidgets.QWidget = Field(exclude=True)
+    parent: Optional[QtWidgets.QWidget] = Field(exclude=True)
 
     _qobject: QtCore.QObject = None
 
