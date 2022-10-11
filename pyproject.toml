@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "koil"
-version = "0.2.6"
+version = "0.2.8"
 readme = "README.md"
 description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]

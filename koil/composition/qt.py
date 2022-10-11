@@ -19,11 +19,6 @@ class QtPedanticKoil(PedanticKoil, QtKoilMixin):
 
     _qobject: QtCore.QObject = None
 
-    @root_validator()
-    def check_not_running_in_koil(cls, values):
-        values["name"] = repr(values["parent"])
-        return values
-
     def create_task(self, coro, *args, **kwargs) -> QtFuture:
         logger.warning(
             """Creating a task within the qt loop is not recommended. As this might lead to deathlocks and other bad things. (Especially when calling qt back from the koil). Try to use a `create_runner`
