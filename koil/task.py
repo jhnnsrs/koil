@@ -118,6 +118,7 @@ class KoilRunner(Generic[T, P]):
         kwargs = {**self.kwargs, **kwargs}
 
         loop = current_loop.get()
+        assert loop is not None, "No loop found"
         assert loop.is_running(), "Loop is not running"
         assert not loop.is_closed(), "Loop is closed"
         cancel_event = threading.Event()
@@ -143,6 +144,7 @@ class KoilGeneratorRunner(Generic[P, T]):
 
     def run(self, *args: P.args, **kwargs: P.kwargs):
         loop = current_loop.get()
+        assert loop is not None, "No koiled loop found"
         assert loop.is_running(), "Loop is not running"
         assert not loop.is_closed(), "Loop is closed"
         ait = self.iterator(*self.args, **self.kwargs).__aiter__()
