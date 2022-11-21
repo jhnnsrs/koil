@@ -1,9 +1,7 @@
 import asyncio
 
-from koil.errors import ContextError
 
 from koil import unkoil, unkoilable, koilable
-from koil.errors import CancelledError
 from koil.helpers import iterate_spawned, run_spawned, unkoil_gen
 from koil.koil import Koil
 from koil.vars import check_cancelled

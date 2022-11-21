@@ -3,7 +3,6 @@ import threading
 
 import janus
 from koil.errors import (
-    CancelledError,
     KoilError,
     KoilStopIteration,
     ThreadCancelledError,
@@ -190,7 +189,6 @@ async def run_spawned(
             await asyncio.wait_for(f, timeout=cancel_timeout)
         except ThreadCancelledError:
             logging.info("Future in another thread was sucessfully cancelled")
-            pass
         except asyncio.TimeoutError as te:
             raise KoilError(
                 f"We could not successfully cancel the future {f} another thread. Make sure you are not blocking the thread with a long running task and check if you check_cancelled every now and then"

@@ -1,7 +1,6 @@
 from contextvars import ContextVar
 
 
-import contextvars
 
 
 class Context:

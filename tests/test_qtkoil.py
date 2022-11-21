@@ -236,7 +236,6 @@ def test_call_future(qtbot):
     with qtbot.waitSignal(widget.my_coro_task.returned, timeout=1000):
 
         qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton)
-        pass
 
     assert widget.task_was_run == True
     assert widget.coroutine_was_run == True

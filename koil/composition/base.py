@@ -1,9 +1,8 @@
 import asyncio
 from pydantic import BaseModel, Field, root_validator
-from pydantic.dataclasses import dataclass
 
 from koil.decorators import koilable
-from typing import Optional, Type, TypeVar
+from typing import Optional, TypeVar
 from koil.vars import *
 from koil.errors import *
 from koil.koil import *
@@ -24,6 +23,7 @@ class PedanticKoil(BaseModel, KoilMixin):
     _loop = None
 
     @root_validator()
+    @classmethod
     def check_not_running_in_koil(cls, values):
         if current_loop.get() is not None:
             raise ValueError(

@@ -1,14 +1,11 @@
-import contextvars
 import logging
-import asyncio
 import threading
-import time
-from typing import AsyncIterator, Awaitable, Callable, Coroutine, Generic, TypeVar
+from typing import AsyncIterator, Awaitable, Callable, Generic, TypeVar
 from koil.errors import CancelledError
 from koil.vars import current_cancel_event, current_loop
 import inspect
 from .utils import run_threaded_with_context
-from typing_extensions import ParamSpec, final
+from typing_extensions import ParamSpec
 import concurrent.futures
 
 logger = logging.getLogger(__name__)

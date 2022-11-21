@@ -1,33 +1,33 @@
 [tool.poetry]
 name = "koil"
-version = "0.2.8"
+version = "0.2.10"
 readme = "README.md"
 description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
 license = "CC BY-NC 3.0"
-packages = [{include = "koil"}]
+packages = [{ include = "koil" }]
 
 [tool.poetry.dependencies]
 python = "^3.7"
-qtpy = {version = ">1", optional = true}
-uvloop =  {version = "^0.16.0", optional= true}
+qtpy = { version = ">1", optional = true }
+uvloop = { version = "^0.16.0", optional = true }
 janus = "^1.0.0"
 
 [tool.poetry.extras]
 qtpy = ["qt"]
 uvloop = ["uvloop"]
 
-[tool.poetry.dev-dependencies]
-pytest = "^7.0.1"
-pytest-aiohttp = "^0.3.0"
-pytest-cov = "^3.0.0"
-black = "^21.12b0"
-tox = "^3.24.5"
-pydoc-markdown = "^4.5.1"
-pytest-qt = "^4.0.2"
-PyQt5 = "^5.15.6"
-QtPy = "^2.0.1"
-pydantic = "^1.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.2.0"
+black = "^22.10.0"
+pytest-cov = "^4.0.0"
+pytest-qt = "^4.2.0"
+QtPy = "^2.3.0"
+PyQt5 = "^5.15.7"
+pytest-asyncio = "^0.20.2"
+pydantic = "^1.10.2"
+autoflake = "^1.7.7"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -38,10 +38,9 @@ asyncio_mode = "auto"
 
 [[tool.pydoc-markdown.loaders]]
 type = "python"
-search_path = [ "koil" ]
+search_path = ["koil"]
 
 
 [tool.pydoc-markdown.renderer]
 type = "docusaurus"
 docs_base_path = "website/docs"
-

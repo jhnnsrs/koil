@@ -4,12 +4,10 @@ from dataclasses import dataclass
 import os
 import sys
 import threading
-from typing import Any, Optional, Type
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field
 from koil.errors import ContextError
 from koil.vars import *
-from koil.task import KoilFuture, KoilRunner
 import time
 import logging
 
@@ -177,4 +175,3 @@ class Koil(KoilMixin):
     """How would you like to name this loop"""
 
     force_lonely: bool = False
-    pass

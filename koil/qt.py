@@ -3,15 +3,11 @@ import contextvars
 import inspect
 import logging
 import threading
-import uuid
-from asyncio.futures import Future
-from concurrent import futures
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Generic, TypeVar
 
-from qtpy import QtCore, QtGui, QtWidgets
-from qtpy.QtCore import QObject, QThread, Signal
-from typing_extensions import ParamSpec, final
+from qtpy import QtCore, QtWidgets
+from typing_extensions import ParamSpec
 
 from koil.koil import Koil, KoilMixin
 from koil.task import KoilFuture, KoilGeneratorRunner, KoilRunner, KoilYieldFuture

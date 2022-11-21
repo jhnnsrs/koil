@@ -1,4 +1,3 @@
-from operator import ge
 from koil.helpers import unkoil
 from koil.koil import Koil
 import inspect

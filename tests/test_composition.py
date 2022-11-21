@@ -1,7 +1,6 @@
 from koil.composition import Composition
 import asyncio
-from koil import koilable, unkoilable
-from pydantic import BaseModel, Field
+from pydantic import Field
 from koil.composition.base import KoiledModel
 
 from koil.helpers import unkoil
@@ -13,7 +12,6 @@ class Kant(KoiledModel):
     async def __aenter__(self):
         self.connected = True
         await asyncio.sleep(0.004)
-        pass
 
     async def __aexit__(self, *args, **kwargs):
         self.connected = False
