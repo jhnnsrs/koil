@@ -123,10 +123,13 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
             if self.use_context:
                 for ctx, value in ctx.items():
                     ctx.set(value)
-
-            x = self.coro(future, *args, **kwargs)
+        
             if self.autoresolve:
+                x = self.coro(*args, **kwargs)
                 future.resolve(x)
+            else:
+                x = self.coro(future, *args, **kwargs)
+
         except Exception as e:
             logger.error(f"Error in Qt Coro {self.coro}", exc_info=True)
             future.reject(e)

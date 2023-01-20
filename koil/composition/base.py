@@ -40,6 +40,9 @@ class PedanticKoil(BaseModel, KoilMixin):
 
         return values
 
+    def _repr_html_inline_(self):
+        return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
+
     class Config:
         arbitrary_types_allowed = True
         underscore_attrs_are_private = True
@@ -100,3 +103,5 @@ class Composition(KoiledModel):
             + "\n".join(["<tr><td>{}</td></tr>".format(key) for key, value in self])
             + "</table></div>"
         )
+
+    

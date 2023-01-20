@@ -162,6 +162,7 @@ class KoilMixin:
         self.running = False
 
 
+
 @dataclass
 class Koil(KoilMixin):
 
