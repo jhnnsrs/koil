@@ -1,6 +1,6 @@
 import asyncio
 from pydantic import BaseModel, Field, root_validator
-
+from dataclasses import field
 from koil.decorators import koilable
 from typing import Optional, TypeVar
 from koil.vars import *
@@ -79,6 +79,9 @@ class KoiledModel(BaseModel):
     class Config:
         arbitrary_types_allowed = True
         extra = "forbid"
+        copy_on_model_validation = "none"
+
+
 
 
 class Composition(KoiledModel):
