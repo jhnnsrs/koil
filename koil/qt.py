@@ -8,7 +8,7 @@ from typing import Callable, Generic, TypeVar
 
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
-
+from functools import partial
 from koil.koil import Koil, KoilMixin
 from koil.task import KoilFuture, KoilGeneratorRunner, KoilRunner, KoilYieldFuture
 from koil.utils import (
@@ -16,7 +16,7 @@ from koil.utils import (
     run_threaded_with_context_and_signals,
 )
 from koil.vars import current_loop
-
+import uuid
 logger = logging.getLogger(__name__)
 
 
@@ -152,6 +152,77 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         except asyncio.CancelledError:
             qtfuture._set_cancelled()
             raise
+
+
+class QtListener():
+
+    def __init__(self,loop, queue) -> None:
+        self.queue = queue
+        self.loop = loop
+
+    def __call__(self, *args):
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
+
+
+class Iterator():
+
+    def __init__(self,queue, timeout=None) -> None:
+        self.queue = queue
+        self.timeout = timeout
+
+
+    def __anext__(self):
+        return self.next()
+
+
+class QtSignal(QtCore.QObject, Generic[T, P]):
+
+    def __init__(
+        self,
+
+        signal: QtCore.Signal,
+        *args,
+        use_context=True,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.signal = signal
+        self.signal.connect(self.on_called)
+        self.listeners = {}
+        self.use_context = use_context
+        self._attached = None
+
+    def on_called(self, *returns):
+        for listener in self.listeners.values():
+            listener(*returns)
+
+
+    async def aiterate(self, timeout=None):
+        unique_id = uuid.uuid4().hex
+        loop = asyncio.get_event_loop()
+        queue = asyncio.Queue()
+        listener = self.listeners[unique_id] = QtListener(loop, queue)
+
+        try:
+            while True:
+                z = await asyncio.wait_for(listener.queue.get(), timeout=timeout)
+                if len(z) == 1:
+                    z = z[0]
+                yield z
+
+        except Exception as e:
+            del self.listeners[unique_id]
+            raise e
+
+        except asyncio.CancelledError:
+            del self.listeners[unique_id]
+            raise
+    
+    async def aonce(self, timeout=None):
+        async for i in self.aiterate(timeout=timeout):
+            return i
+
+
 
 
 class QtRunner(KoilRunner, QtCore.QObject):
