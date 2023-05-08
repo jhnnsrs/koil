@@ -76,7 +76,7 @@ def unkoil(coro, *args, **kwargs):
         if not loop or loop0 == loop:
             return coro(
                 *args, **kwargs
-            )  # We are running in an event loop so we can just return the coroutine
+            )  # We are running in an event doop so we can just return the coroutine
 
     except RuntimeError:
         pass

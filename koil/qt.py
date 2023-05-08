@@ -17,6 +17,7 @@ from koil.utils import (
 )
 from koil.vars import current_loop
 import uuid
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +37,7 @@ def get_receiver_length(qobject, qsignal, callstring):
 
 class QtFuture:
     def __init__(self):
+        self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
         self.aiofuture = asyncio.Future()
         self.iscancelled = False
@@ -98,7 +100,7 @@ P = ParamSpec("P")
 
 class QtCoro(QtCore.QObject, Generic[T, P]):
     called = QtCore.Signal(QtFuture, tuple, dict, object)
-    cancelled = QtCore.Signal(str)
+    cancelled = QtCore.Signal(QtFuture)
 
     def __init__(
         self,
@@ -118,12 +120,11 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         self.use_context = use_context
 
     def on_called(self, future, args, kwargs, ctx):
-
         try:
             if self.use_context:
                 for ctx, value in ctx.items():
                     ctx.set(value)
-        
+
             if self.autoresolve:
                 x = self.coro(*args, **kwargs)
                 future.resolve(x)
@@ -151,12 +152,12 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
 
         except asyncio.CancelledError:
             qtfuture._set_cancelled()
+            self.cancelled.emit(qtfuture)
             raise
 
 
-class QtListener():
-
-    def __init__(self,loop, queue) -> None:
+class QtListener:
+    def __init__(self, loop, queue) -> None:
         self.queue = queue
         self.loop = loop
 
@@ -164,22 +165,18 @@ class QtListener():
         self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
 
 
-class Iterator():
-
-    def __init__(self,queue, timeout=None) -> None:
+class Iterator:
+    def __init__(self, queue, timeout=None) -> None:
         self.queue = queue
         self.timeout = timeout
-
 
     def __anext__(self):
         return self.next()
 
 
 class QtSignal(QtCore.QObject, Generic[T, P]):
-
     def __init__(
         self,
-
         signal: QtCore.Signal,
         *args,
         use_context=True,
@@ -195,7 +192,6 @@ class QtSignal(QtCore.QObject, Generic[T, P]):
     def on_called(self, *returns):
         for listener in self.listeners.values():
             listener(*returns)
-
 
     async def aiterate(self, timeout=None):
         unique_id = uuid.uuid4().hex
@@ -217,12 +213,10 @@ class QtSignal(QtCore.QObject, Generic[T, P]):
         except asyncio.CancelledError:
             del self.listeners[unique_id]
             raise
-    
+
     async def aonce(self, timeout=None):
         async for i in self.aiterate(timeout=timeout):
             return i
-
-
 
 
 class QtRunner(KoilRunner, QtCore.QObject):
