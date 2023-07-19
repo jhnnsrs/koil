@@ -1,20 +1,46 @@
 import asyncio
 import threading
-
+from .process import KoiledProcess
 import janus
 from koil.errors import (
     KoilError,
     KoilStopIteration,
     ThreadCancelledError,
+    ProcessCancelledError,
 )
 from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
-from koil.vars import *
+from koil.vars import (
+    input_queue_context,
+    output_queue_context,
+    is_in_process,
+    current_loop,
+    current_cancel_event,
+)
+import contextvars
 import time
 import logging
+from .process import send_to_queue, get_from_queue
 
 
 def unkoil_gen(iterator, *args, **kwargs):
+    if is_in_process():
+        input_queue = input_queue_context.get()
+        out_queue = output_queue_context.get()
+        print("Sending to Main")
+        send_to_queue(input_queue, "iter", iterator, args, kwargs)
+
+        while True:
+            print("Waiting for answer")
+            answer, args = get_from_queue(out_queue)
+            if answer == "yield":
+                yield args
+            elif answer == "done":
+                break
+            elif answer == "cancel":
+                raise ProcessCancelledError("Cancelled during loop back")
+            else:
+                raise KoilError(f"Unexpected answer: {answer}")
 
     loop = current_loop.get()
     try:
@@ -70,6 +96,24 @@ def unkoil_gen(iterator, *args, **kwargs):
 
 
 def unkoil(coro, *args, **kwargs):
+    if is_in_process():
+        input_queue = input_queue_context.get()
+        out_queue = output_queue_context.get()
+
+        print("Sending to Main")
+        send_to_queue(input_queue, "call", coro, args, kwargs)
+        while True:
+            print("Waiting for answer")
+            answer, returns = get_from_queue(out_queue)
+            if answer == "return":
+                return returns[0]
+            elif answer == "err":
+                raise args
+            elif answer == "cancel":
+                raise ProcessCancelledError("Cancelled during loop back")
+            else:
+                raise KoilError(f"Unexpected answer: {answer}")
+
     loop = current_loop.get()
     try:
         loop0 = asyncio.events.get_running_loop()
@@ -278,7 +322,6 @@ async def iterate_spawned(
 
     try:
         while True:
-
             it_task = asyncio.create_task(yield_queue.async_q.get())
 
             finish, unfinished = await asyncio.wait(
@@ -311,6 +354,24 @@ async def iterate_spawned(
         )
 
         raise e
+
+
+async def run_processed(func, *args, **kwargs):
+    p = KoiledProcess()
+    try:
+        result = await p.call(func, *args, **kwargs)
+        return result
+    finally:
+        p.quit()
+
+
+async def iterate_processed(func, *args, **kwargs):
+    p = KoiledProcess()
+    try:
+        async for i in p.iter(func, *args, **kwargs):
+            yield i
+    finally:
+        p.quit()
 
 
 def create_task(coro, *args, **kwargs) -> KoilFuture:
