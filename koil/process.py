@@ -39,7 +39,7 @@ def unkoil_process_gen(iterator, args, kwargs):
         elif answer == DONE:
             break
         elif answer == CANCEL:
-            raise ProcessCancelledError("Cancelled during loop back")
+            raise ProcessCancelledError("Cancelled during loop back of generator")
         else:
             raise KoilError(f"Unexpected answer: {answer}")
         
