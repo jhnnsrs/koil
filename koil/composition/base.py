@@ -82,8 +82,6 @@ class KoiledModel(BaseModel):
         copy_on_model_validation = "none"
 
 
-
-
 class Composition(KoiledModel):
     async def __aenter__(self: T) -> T:
         for key, value in self:
@@ -106,5 +104,3 @@ class Composition(KoiledModel):
             + "\n".join(["<tr><td>{}</td></tr>".format(key) for key, value in self])
             + "</table></div>"
         )
-
-    
