@@ -24,6 +24,8 @@ jobs:
           poetry-version: ${{ matrix.poetry-version }}
       - name: Run Poetry Install
         run: poetry install
+      - name: Install Qt because Qt sucks with Poetry
+        run: poetry run pip install pyqt5
       - name: Run Tests
         run: poetry run pytest --cov --cov-report=xml .
       - name: Upload coverage to Codecov
