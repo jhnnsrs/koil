@@ -25,10 +25,18 @@ def is_in_process():
     return in_process_context.get()
 
 
-def serialize_context(sendable_suffixes=None, omit_vars=None):
+def matches_suffixes(name, suffixes):
+    for i in suffixes:
+        if name.endswith(i):
+            return True
+    return False
+
+
+def serialize_context(omit_vars=None, omit_suffixes=None, silent_errors=True):
     copy  = contextvars.copy_context()
 
     send_context = {}
+    omit_suffixes = omit_suffixes or ["_unpickkable"]
 
     for ctx, value in copy.items():
         if ctx.name in send_context:
@@ -36,12 +44,18 @@ def serialize_context(sendable_suffixes=None, omit_vars=None):
 
         if omit_vars and ctx.name in omit_vars:
             continue
-        if sendable_suffixes is None:
-            send_context[ctx.name] = value
-        else:
-            for i in sendable_suffixes or []:
-                if ctx.name.endswith(i):
-                    send_context[ctx.name] = value
+        
+        if matches_suffixes(ctx.name, omit_suffixes):
+            continue
+        try:
+            send_context[ctx.name] = cloudpickle.dumps(value)
+        except Exception as e:
+            if silent_errors:
+                continue
+            else:
+                raise KoilError(f"Could not serialize context variable {ctx.name}") from e
+
+
     return send_context
 
 
@@ -49,7 +63,7 @@ def deserialize_context(context):
     x = contextvars.copy_context()
     for ctx, value in x.items():
         if ctx.name in context:
-            ctx.set(context[ctx.name])
+            ctx.set(cloudpickle.loads(context[ctx.name]))
 
     return x
     
@@ -156,7 +170,7 @@ def worker(input_queue, output_queue):
 class KoiledProcess:
     """A class that allows to call functions in a separate process."""
 
-    def __init__(self, max_workers=1, omit_vars=None):
+    def __init__(self, max_workers=1, omit_vars=None, silent_errors=True):
         """Create a new KoiledProcess.
 
         Args:
@@ -174,6 +188,7 @@ class KoiledProcess:
             target=worker, args=(self.input_queue, self.output_queue)
         )
         self.omit_vars = omit_vars
+        self.silent_errors = silent_errors
 
         self.started = False
 
@@ -190,12 +205,14 @@ class KoiledProcess:
         return await asyncio.get_event_loop().run_in_executor(
             self.executor, get_from_queue, self.output_queue
         )
+    
+    def serialize_context(self):
+        return serialize_context(omit_vars=self.omit_vars, silent_errors=self.silent_errors)
 
     async def call(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
-        context = serialize_context(omit_vars=self.omit_vars)
-
+        context = self.serialize_context()
         try:
             send_to_queue(self.input_queue, CALL, (func, context, args, kwargs))
 
@@ -242,7 +259,7 @@ class KoiledProcess:
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
 
-        context = serialize_context(omit_vars=self.omit_vars)
+        context = self.serialize_context()
         try:
             send_to_queue(self.input_queue, ITER, (func, context, args, kwargs))
 
