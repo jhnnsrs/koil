@@ -4,6 +4,7 @@ import multiprocessing
 from .errors import ProcessCancelledError,  KoilError
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+import cvpickle
 
 
 try:
@@ -23,7 +24,6 @@ CALL = 8
 
 def is_in_process():
     return in_process_context.get()
-
 
 def unkoil_process_gen(iterator, args, kwargs):
     input_queue = input_queue_context.get()
@@ -76,9 +76,7 @@ def get_from_queue(queue):
     return task, func_args_kwargs_return_exception
 
 
-def worker(context, input_queue, output_queue):
-    for ctx, value in context.items():
-        ctx.set(value)
+def worker(input_queue, output_queue):
 
     output_queue_context.set(input_queue)
     input_queue_context.set(output_queue)
@@ -138,9 +136,8 @@ class KoiledProcess:
         self.output_queue = multiprocessing.Queue()
 
         # Start the worker process
-        context = contextvars.copy_context()
         self.worker_process = multiprocessing.Process(
-            target=worker, args=(context, self.input_queue, self.output_queue)
+            target=worker, args=(self.input_queue, self.output_queue)
         )
         self.started = False
 
