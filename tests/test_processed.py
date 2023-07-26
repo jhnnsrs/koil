@@ -6,7 +6,10 @@ from koil.errors import ContextError
 from koil.helpers import unkoil, unkoil_gen, run_processed, iterate_processed
 from .context import AsyncContextManager
 from koil import Koil
+import contextvars
 
+
+t = contextvars.ContextVar("t", default=0)
 
 async def sleep(ins):
     await asyncio.sleep(0.001)
@@ -31,12 +34,12 @@ async def iterate_and_raise():
 def test_sync_context():
 
     with AsyncContextManager() as c:
-        print(c.aprint())
+        c.aprint()
 
 
 async def test_async_context():
     async with AsyncContextManager() as c:
-        print(await c.aprint())
+        await c.aprint()
 
 
 def test_sync():
@@ -63,6 +66,9 @@ def back_calling_raising_func(arg: int, number: int):
 
 
 
+def context_vars():
+    return t.get() 
+    
 
 
 
@@ -85,6 +91,7 @@ async def test_spawn_process_back_raise_calling_func():
     async with Koil():
         with pytest.raises(Exception, match="This is a sleep and raise exception"):
             assert await run_processed(back_calling_raising_func, 1, number=2) == 3, "Process should run and return 3"
+
 
 
 
@@ -130,3 +137,15 @@ async def test_spawn_process_back_raise_calling_gen():
         with pytest.raises(Exception, match="This is an iterate and raise exception"):
             async for i in iterate_processed(back_calling_raising_gen, 1, number=2):
                 assert i == 3, "Process should run and yield 3"
+
+
+
+
+
+
+async def test_context_var():
+    async with Koil():
+        t.set(1)
+        assert await run_processed(context_vars) == 1, "Process should run and return 1"
+        t.set(5)
+        assert await run_processed(context_vars) == 5, "Process should run and return 1"

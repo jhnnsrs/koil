@@ -330,13 +330,13 @@ async def iterate_spawned(
         raise e
 
 
-async def run_processed(func, *args, **kwargs):
-    async with KoiledProcess() as p:
+async def run_processed(func, *args, _omit_vars=None, **kwargs, ):
+    async with KoiledProcess(omit_vars=_omit_vars) as p:
         return await p.call(func, *args, **kwargs)
 
 
-async def iterate_processed(func, *args, **kwargs):
-    async with KoiledProcess() as p:
+async def iterate_processed(func, *args, _omit_vars=None, **kwargs):
+    async with KoiledProcess(omit_vars=_omit_vars) as p:
         async for i in p.iter(func, *args, **kwargs):
             yield i
 

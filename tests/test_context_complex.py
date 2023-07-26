@@ -83,7 +83,6 @@ def test_x_sync():
         l = unkoil_gen(x.g)
         l.send(None)
         l.send(None)
-        print("Here")
         try:
             l.send(None)
         except StopIteration:

@@ -4,7 +4,6 @@ import multiprocessing
 from .errors import ProcessCancelledError,  KoilError
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
-import cvpickle
 
 
 try:
@@ -24,6 +23,38 @@ CALL = 8
 
 def is_in_process():
     return in_process_context.get()
+
+
+def serialize_context(sendable_suffixes=None, omit_vars=None):
+    copy  = contextvars.copy_context()
+
+    send_context = {}
+
+    for ctx, value in copy.items():
+        if ctx.name in send_context:
+            raise KoilError(f"Context variable {ctx.name} is used multiple times. This will lead to unexpected behaviour. Please rename the variable.")
+
+        if omit_vars and ctx.name in omit_vars:
+            continue
+        if sendable_suffixes is None:
+            send_context[ctx.name] = value
+        else:
+            for i in sendable_suffixes or []:
+                if ctx.name.endswith(i):
+                    send_context[ctx.name] = value
+    return send_context
+
+
+def deserialize_context(context):
+    x = contextvars.copy_context()
+    for ctx, value in x.items():
+        if ctx.name in context:
+            ctx.set(context[ctx.name])
+
+    return x
+    
+
+
 
 def unkoil_process_gen(iterator, args, kwargs):
     input_queue = input_queue_context.get()
@@ -76,6 +107,10 @@ def get_from_queue(queue):
     return task, func_args_kwargs_return_exception
 
 
+def gen_runner(queue, gen, *args, **kwargs):
+    for i in gen(*args, **kwargs):
+        send_to_queue(queue, YIELD, i)
+
 def worker(input_queue, output_queue):
 
     output_queue_context.set(input_queue)
@@ -85,19 +120,19 @@ def worker(input_queue, output_queue):
         # Wait for a task
         task, func_args_kwargs_return_exception = get_from_queue(input_queue)
         if task == CALL:
-            func, args, kwargs = func_args_kwargs_return_exception
+            func, context, args, kwargs = func_args_kwargs_return_exception
             try:
-                result = func(*args, **kwargs)
+                ctx = deserialize_context(context)
+                result = ctx.run(func, *args, **kwargs)
                 send_to_queue(output_queue, RETURN, result)
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
 
         if task == ITER:
-            gen, args, kwargs = func_args_kwargs_return_exception
+            gen, context, args, kwargs = func_args_kwargs_return_exception
             try:
-                for i in gen(*args, **kwargs):
-                    send_to_queue(output_queue, YIELD, i)
-
+                ctx = deserialize_context(context)
+                ctx.run(gen_runner, output_queue, gen, *args, **kwargs)
                 send_to_queue(output_queue, DONE, None)
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
@@ -112,7 +147,6 @@ def worker(input_queue, output_queue):
             break
 
         if task == EXCEPTION:
-            print("Unsupported path TERMINAL SHIT")
             raise  func_args_kwargs_return_exception
 
         if task == QUIT:
@@ -122,7 +156,7 @@ def worker(input_queue, output_queue):
 class KoiledProcess:
     """A class that allows to call functions in a separate process."""
 
-    def __init__(self, max_workers=1):
+    def __init__(self, max_workers=1, omit_vars=None):
         """Create a new KoiledProcess.
 
         Args:
@@ -139,6 +173,8 @@ class KoiledProcess:
         self.worker_process = multiprocessing.Process(
             target=worker, args=(self.input_queue, self.output_queue)
         )
+        self.omit_vars = omit_vars
+
         self.started = False
 
     async def __aenter__(self):
@@ -151,7 +187,6 @@ class KoiledProcess:
             self.quit()
 
     async def get_output(self):
-        print("GETTING OUTPUT")
         return await asyncio.get_event_loop().run_in_executor(
             self.executor, get_from_queue, self.output_queue
         )
@@ -159,8 +194,10 @@ class KoiledProcess:
     async def call(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
+        context = serialize_context(omit_vars=self.omit_vars)
+
         try:
-            send_to_queue(self.input_queue, CALL, (func, args, kwargs))
+            send_to_queue(self.input_queue, CALL, (func, context, args, kwargs))
 
             # Wait for the result and then execute the callback
             while True:
@@ -204,8 +241,10 @@ class KoiledProcess:
     async def iter(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
+
+        context = serialize_context(omit_vars=self.omit_vars)
         try:
-            send_to_queue(self.input_queue, ITER, (func, args, kwargs))
+            send_to_queue(self.input_queue, ITER, (func, context, args, kwargs))
 
             # Wait for the result and then execute the callback
             while True:
