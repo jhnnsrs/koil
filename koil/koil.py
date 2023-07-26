@@ -22,7 +22,6 @@ except:
 
 @contextmanager
 def _selector_policy(uvify=True):
-
     original_policy = asyncio.get_event_loop_policy()
 
     try:
@@ -43,7 +42,6 @@ def _selector_policy(uvify=True):
 
 
 def run_threaded_event_loop(loop):
-
     try:
         loop.run_forever()
     finally:
@@ -162,15 +160,13 @@ class KoilMixin:
         self.running = False
 
 
-
 @dataclass
 class Koil(KoilMixin):
-
     creating_instance: Optional[Any] = None
     "The instance that created this class through entering"
 
     uvify: bool = False
-    """Shoul we spawn a new thread for each task?"""
+    """Shoul we run the loop with uvloop?"""
 
     name: str = "KoilLoop"
     """How would you like to name this loop"""

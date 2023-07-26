@@ -28,13 +28,6 @@ class UnconnectedSignalError(Exception):
     pass
 
 
-def get_receiver_length(qobject, qsignal, callstring):
-    try:
-        return qobject.receivers(qsignal)
-    except:
-        return qobject.receivers(callstring)
-
-
 class QtFuture:
     def __init__(self):
         self.id = uuid.uuid4().hex
@@ -163,15 +156,6 @@ class QtListener:
 
     def __call__(self, *args):
         self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
-
-
-class Iterator:
-    def __init__(self, queue, timeout=None) -> None:
-        self.queue = queue
-        self.timeout = timeout
-
-    def __anext__(self):
-        return self.next()
 
 
 class QtSignal(QtCore.QObject, Generic[T, P]):
@@ -324,6 +308,10 @@ class QtKoilMixin(KoilMixin):
         if ap_instance is None:
             raise NotImplementedError("Qt Application not found")
         return self
+
+
+def async_generator_to_qt(func):
+    return QtGeneratorRunner(func)
 
 
 class WrappedObject(QtCore.QObject):

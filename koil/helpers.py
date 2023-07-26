@@ -11,36 +11,25 @@ from koil.errors import (
 from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
 from koil.vars import (
-    input_queue_context,
-    output_queue_context,
-    is_in_process,
     current_loop,
     current_cancel_event,
 )
 import contextvars
 import time
 import logging
-from .process import send_to_queue, get_from_queue
+from .process import (
+    unkoil_process_gen,
+    unkoil_process_func,
+    is_in_process
+)
 
 
 def unkoil_gen(iterator, *args, **kwargs):
     if is_in_process():
-        input_queue = input_queue_context.get()
-        out_queue = output_queue_context.get()
-        print("Sending to Main")
-        send_to_queue(input_queue, "iter", iterator, args, kwargs)
+        for i in unkoil_process_gen(iterator, args, kwargs):
+            yield i
 
-        while True:
-            print("Waiting for answer")
-            answer, args = get_from_queue(out_queue)
-            if answer == "yield":
-                yield args
-            elif answer == "done":
-                break
-            elif answer == "cancel":
-                raise ProcessCancelledError("Cancelled during loop back")
-            else:
-                raise KoilError(f"Unexpected answer: {answer}")
+        return
 
     loop = current_loop.get()
     try:
@@ -97,22 +86,7 @@ def unkoil_gen(iterator, *args, **kwargs):
 
 def unkoil(coro, *args, **kwargs):
     if is_in_process():
-        input_queue = input_queue_context.get()
-        out_queue = output_queue_context.get()
-
-        print("Sending to Main")
-        send_to_queue(input_queue, "call", coro, args, kwargs)
-        while True:
-            print("Waiting for answer")
-            answer, returns = get_from_queue(out_queue)
-            if answer == "return":
-                return returns[0]
-            elif answer == "err":
-                raise args
-            elif answer == "cancel":
-                raise ProcessCancelledError("Cancelled during loop back")
-            else:
-                raise KoilError(f"Unexpected answer: {answer}")
+        return unkoil_process_func(coro, args, kwargs)
 
     loop = current_loop.get()
     try:
@@ -357,21 +331,14 @@ async def iterate_spawned(
 
 
 async def run_processed(func, *args, **kwargs):
-    p = KoiledProcess()
-    try:
-        result = await p.call(func, *args, **kwargs)
-        return result
-    finally:
-        p.quit()
+    async with KoiledProcess() as p:
+        return await p.call(func, *args, **kwargs)
 
 
 async def iterate_processed(func, *args, **kwargs):
-    p = KoiledProcess()
-    try:
+    async with KoiledProcess() as p:
         async for i in p.iter(func, *args, **kwargs):
             yield i
-    finally:
-        p.quit()
 
 
 def create_task(coro, *args, **kwargs) -> KoilFuture:

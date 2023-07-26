@@ -18,5 +18,14 @@ def check_cancelled():
         raise ThreadCancelledError("Task was cancelled")
 
 
-def is_in_process():
-    return in_process_context.get()
+
+def get_process_queues():
+    """Get the process queues.
+
+    Returns the input and output queues of the current process.
+
+    Returns:
+        multiprocessing.Queue: The input queue
+        multiprocessing.Queue: The output queue
+    """
+    return input_queue_context.get(), output_queue_context.get()

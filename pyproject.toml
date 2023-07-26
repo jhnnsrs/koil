@@ -35,6 +35,11 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+qt_api = "pyqt5"
+markers = [
+    "qt: marks tests that require a running qt application",
+]
+
 
 [[tool.pydoc-markdown.loaders]]
 type = "python"

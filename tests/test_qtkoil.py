@@ -2,7 +2,7 @@ import asyncio
 from PyQt5 import QtWidgets, QtCore
 from koil.qt import QtCoro, QtFuture, QtGenerator, QtGeneratorRunner, QtKoil, QtRunner
 import contextvars
-
+import pytest
 x = contextvars.ContextVar("x")
 
 
@@ -190,6 +190,7 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
         print("nana")
 
 
+@pytest.mark.qt
 def test_koil_qt_no_interference(qtbot):
     """Tests if just adding koil interferes with normal
     qtpy widgets.
@@ -205,7 +206,7 @@ def test_koil_qt_no_interference(qtbot):
 
     assert widget.greet_label.text() == "Hello!"
 
-
+@pytest.mark.qt
 def test_koil_qt_call_task(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
@@ -215,7 +216,7 @@ def test_koil_qt_call_task(qtbot):
     with qtbot.waitSignal(widget.sleep_and_resolve_task.returned) as b:
         qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton)
 
-
+@pytest.mark.qt
 def test_call_gen(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
@@ -226,7 +227,7 @@ def test_call_gen(qtbot):
 
         qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton)
 
-
+@pytest.mark.qt
 def test_call_future(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingFutureWidget()
@@ -240,7 +241,7 @@ def test_call_future(qtbot):
     assert widget.task_was_run == True
     assert widget.coroutine_was_run == True
 
-
+@pytest.mark.qt
 def test_call_raise(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
@@ -253,7 +254,7 @@ def test_call_raise(qtbot):
 
     assert isinstance(b.args[0], Exception)
 
-
+@pytest.mark.qt
 def test_context(qtbot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()

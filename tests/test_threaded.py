@@ -66,7 +66,7 @@ def test_double_context():
             print(c.aprint())
 
 
-def test_ierating():
+def test_iterating():
 
     with Koil():
 
@@ -76,11 +76,3 @@ def test_ierating():
         assert next(x) == 3
 
 
-def test_ierating():
-
-    with Koil():
-
-        x = unkoil_gen(iterating)
-        assert next(x) == 1
-        assert next(x) == 2
-        assert next(x) == 3

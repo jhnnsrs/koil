@@ -20,10 +20,14 @@ def koilable(
     """
     Decorator to make an async generator koilable.
 
+    Args:
+        fieldname (str, optional): The name of the field to store the koil instance. Defaults to "__koil".
+        add_connectors (bool, optional): If True, it will add the connectors to the class. Defaults to False.
+        koil_class (Type[Koil], optional): The class of the koil to use. Defaults to Koil.
+
     """
 
     def real_cls_decorator(cls: Type[T]) -> Type[T]:
-
         cls.__koilable__ = True
         assert hasattr(cls, "__aenter__"), "Class must implement __aenter__"
         assert hasattr(cls, "__aenter__"), "Class must implement __aexit__"
