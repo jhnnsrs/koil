@@ -1,8 +1,9 @@
 from .vars import output_queue_context, input_queue_context, in_process_context
 import contextvars
 import multiprocessing
+
 from .errors import ProcessCancelledError, KoilError
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import asyncio
 
 
@@ -191,6 +192,8 @@ class KoiledProcess:
         self.omit_vars = omit_vars
         self.silent_errors = silent_errors
 
+        self.loop = asyncio.get_event_loop()
+        self.loop.run_in_executor
         self.started = False
 
     async def __aenter__(self):

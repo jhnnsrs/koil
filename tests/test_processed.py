@@ -6,10 +6,7 @@ from koil.errors import ContextError
 from koil.helpers import unkoil, unkoil_gen, run_processed, iterate_processed
 from .context import AsyncContextManager
 from koil import Koil
-import contextvars
-
-
-t = contextvars.ContextVar("t", default=0)
+from .context import t
 
 
 async def sleep(ins):
