@@ -65,8 +65,9 @@ def serialize_context(omit_vars=None, omit_suffixes=None, silent_errors=True):
 
 def deserialize_context(context):
     x = contextvars.copy_context()
-
+    print(context)
     for ctx, value in x.items():
+        print(ctx.name)
         if ctx.name in context:
             ctx.set(cloudpickle.loads(context[ctx.name]))
 

@@ -27,7 +27,7 @@ jobs:
       - name: Install Qt because Qt sucks with Poetry
         run: poetry run pip install pyqt5
       - name: Run Tests
-        run: poetry run pytest --cov --cov-report=xml .
+        run: poetry run pytest --cov --cov-report=xml -s .
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v1
   linux:
@@ -60,6 +60,6 @@ jobs:
         env:
           QT_DEBUG_PLUGINS: 1
           DISPLAY: ":99.0"
-        run: xvfb-run `which poetry` run pytest --cov --cov-report=xml .
+        run: xvfb-run `which poetry` run pytest --cov --cov-report=xml -s .
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v1
