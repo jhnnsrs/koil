@@ -150,7 +150,7 @@ async def test_context_var():
         t.set(1)
         assert (
             await run_processed(context_vars, _silent_errrors=False) == 1
-        ), "Process should run and return 1"
+        ), "Process should run and return correct context"
         t.set(5)
         assert (
             await run_processed(context_vars, _silent_errrors=False) == 5
