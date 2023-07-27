@@ -148,6 +148,10 @@ async def test_spawn_process_back_raise_calling_gen():
 async def test_context_var():
     async with Koil():
         t.set(1)
-        assert await run_processed(context_vars) == 1, "Process should run and return 1"
+        assert (
+            await run_processed(context_vars, _silent_errrors=False) == 1
+        ), "Process should run and return 1"
         t.set(5)
-        assert await run_processed(context_vars) == 5, "Process should run and return 1"
+        assert (
+            await run_processed(context_vars, _silent_errrors=False) == 5
+        ), "Process should run and return 1"

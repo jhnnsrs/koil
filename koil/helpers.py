@@ -17,11 +17,7 @@ from koil.vars import (
 import contextvars
 import time
 import logging
-from .process import (
-    unkoil_process_gen,
-    unkoil_process_func,
-    is_in_process
-)
+from .process import unkoil_process_gen, unkoil_process_func, is_in_process
 
 
 def unkoil_gen(iterator, *args, **kwargs):
@@ -330,13 +326,21 @@ async def iterate_spawned(
         raise e
 
 
-async def run_processed(func, *args, _omit_vars=None, **kwargs, ):
-    async with KoiledProcess(omit_vars=_omit_vars) as p:
+async def run_processed(
+    func,
+    *args,
+    _omit_vars=None,
+    _silent_errrors=True,
+    **kwargs,
+):
+    async with KoiledProcess(omit_vars=_omit_vars, silent_errors=_silent_errrors) as p:
         return await p.call(func, *args, **kwargs)
 
 
-async def iterate_processed(func, *args, _omit_vars=None, **kwargs):
-    async with KoiledProcess(omit_vars=_omit_vars) as p:
+async def iterate_processed(
+    func, *args, _omit_vars=None, _silent_errrors=True, **kwargs
+):
+    async with KoiledProcess(omit_vars=_omit_vars, silent_errors=_silent_errrors) as p:
         async for i in p.iter(func, *args, **kwargs):
             yield i
 
