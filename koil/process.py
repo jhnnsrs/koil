@@ -1,7 +1,7 @@
 from .vars import output_queue_context, input_queue_context, in_process_context
 import contextvars
 import multiprocessing
-from .errors import ProcessCancelledError,  KoilError
+from .errors import ProcessCancelledError, KoilError
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
@@ -21,6 +21,7 @@ DONE = 6
 QUIT = 7
 CALL = 8
 
+
 def is_in_process():
     return in_process_context.get()
 
@@ -33,18 +34,20 @@ def matches_suffixes(name, suffixes):
 
 
 def serialize_context(omit_vars=None, omit_suffixes=None, silent_errors=True):
-    copy  = contextvars.copy_context()
+    copy = contextvars.copy_context()
 
     send_context = {}
     omit_suffixes = omit_suffixes or ["_unpickkable"]
 
     for ctx, value in copy.items():
         if ctx.name in send_context:
-            raise KoilError(f"Context variable {ctx.name} is used multiple times. This will lead to unexpected behaviour. Please rename the variable.")
+            raise KoilError(
+                f"Context variable {ctx.name} is used multiple times. This will lead to unexpected behaviour. Please rename the variable."
+            )
 
         if omit_vars and ctx.name in omit_vars:
             continue
-        
+
         if matches_suffixes(ctx.name, omit_suffixes):
             continue
         try:
@@ -53,21 +56,19 @@ def serialize_context(omit_vars=None, omit_suffixes=None, silent_errors=True):
             if silent_errors:
                 continue
             else:
-                raise KoilError(f"Could not serialize context variable {ctx.name}") from e
-
+                raise KoilError(
+                    f"Could not serialize context variable {ctx.name}"
+                ) from e
 
     return send_context
 
 
 def deserialize_context(context):
     x = contextvars.copy_context()
+
     for ctx, value in x.items():
         if ctx.name in context:
             ctx.set(cloudpickle.loads(context[ctx.name]))
-
-    return x
-    
-
 
 
 def unkoil_process_gen(iterator, args, kwargs):
@@ -87,7 +88,7 @@ def unkoil_process_gen(iterator, args, kwargs):
             raise ProcessCancelledError("Cancelled during loop back of generator")
         else:
             raise KoilError(f"Unexpected answer: {answer}")
-        
+
 
 def unkoil_process_func(coro, args, kwargs):
     input_queue = input_queue_context.get()
@@ -104,7 +105,6 @@ def unkoil_process_func(coro, args, kwargs):
             raise ProcessCancelledError("Cancelled during loop back")
         else:
             raise KoilError(f"Unexpected answer: {answer}")
-
 
 
 def send_to_queue(queue, task, func_args_kwargs_return_exception):
@@ -125,8 +125,8 @@ def gen_runner(queue, gen, *args, **kwargs):
     for i in gen(*args, **kwargs):
         send_to_queue(queue, YIELD, i)
 
-def worker(input_queue, output_queue):
 
+def worker(input_queue, output_queue):
     output_queue_context.set(input_queue)
     input_queue_context.set(output_queue)
     in_process_context.set(True)
@@ -136,8 +136,8 @@ def worker(input_queue, output_queue):
         if task == CALL:
             func, context, args, kwargs = func_args_kwargs_return_exception
             try:
-                ctx = deserialize_context(context)
-                result = ctx.run(func, *args, **kwargs)
+                deserialize_context(context)
+                result = func(*args, **kwargs)
                 send_to_queue(output_queue, RETURN, result)
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
@@ -145,8 +145,8 @@ def worker(input_queue, output_queue):
         if task == ITER:
             gen, context, args, kwargs = func_args_kwargs_return_exception
             try:
-                ctx = deserialize_context(context)
-                ctx.run(gen_runner, output_queue, gen, *args, **kwargs)
+                deserialize_context(context)
+                gen_runner(output_queue, gen, *args, **kwargs)
                 send_to_queue(output_queue, DONE, None)
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
@@ -157,11 +157,11 @@ def worker(input_queue, output_queue):
                 raise ProcessCancelledError("from worker") from exception
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
-            
+
             break
 
         if task == EXCEPTION:
-            raise  func_args_kwargs_return_exception
+            raise func_args_kwargs_return_exception
 
         if task == QUIT:
             break
@@ -205,9 +205,11 @@ class KoiledProcess:
         return await asyncio.get_event_loop().run_in_executor(
             self.executor, get_from_queue, self.output_queue
         )
-    
+
     def serialize_context(self):
-        return serialize_context(omit_vars=self.omit_vars, silent_errors=self.silent_errors)
+        return serialize_context(
+            omit_vars=self.omit_vars, silent_errors=self.silent_errors
+        )
 
     async def call(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
@@ -240,11 +242,9 @@ class KoiledProcess:
                         async for result in func(*args, **kwargs):
                             send_to_queue(self.input_queue, YIELD, result)
 
-                        
                         send_to_queue(self.input_queue, DONE, None)
                     except Exception as e:
                         send_to_queue(self.input_queue, EXCEPTION, e)
-
 
         except asyncio.CancelledError as e:
             send_to_queue(self.input_queue, CANCEL, e)
@@ -290,11 +290,9 @@ class KoiledProcess:
                         async for result in func(*args, **kwargs):
                             send_to_queue(self.input_queue, YIELD, result)
 
-                        
                         send_to_queue(self.input_queue, DONE, None)
                     except Exception as e:
                         send_to_queue(self.input_queue, EXCEPTION, e)
-
 
         except asyncio.CancelledError as e:
             send_to_queue(self.input_queue, CANCEL, e)
