@@ -44,19 +44,15 @@ def koilable(
         def koiled_enter(self, *args, **kwargs):
             potential_koiled_loop = current_loop.get()
             if potential_koiled_loop is not None:
-                assert (
-                    getattr(self, fieldname, None) is None
-                ), f"You cannot enter a koil loop inside another koil loop. Do no set explicitly a Koil in {cls}. Found koiled loop {potential_koiled_loop}"
+                return unkoil(self.__aenter__, *args, **kwargs)
             else:
-                if getattr(self, fieldname, None) is None:
-                    setattr(
-                        self,
-                        fieldname,
-                        koil_class(creating_instance=self, **koilparams),
-                    )
+                setattr(
+                    self,
+                    fieldname,
+                    koil_class(name=f"{repr(self)}", **koilparams),
+                )
                 getattr(self, fieldname).__enter__()
-
-            return unkoil(self.__aenter__, *args, **kwargs)
+                return unkoil(self.__aenter__, *args, **kwargs)
 
         def koiled_exit(self, *args, **kwargs):
             unkoil(self.__aexit__, *args, **kwargs)

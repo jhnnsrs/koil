@@ -7,7 +7,7 @@ import threading
 from typing import Any, Optional
 
 from koil.errors import ContextError
-from koil.vars import *
+from koil.vars import current_loop
 import time
 import logging
 
@@ -121,20 +121,19 @@ class KoilMixin:
         except RuntimeError:
             pass
 
-        self._loop = current_loop.get()
-        assert (
-            self._loop is None
-        ), f"You are already in a koiled context. You can't nest koiled contexts. Omit creating a new Koil here {self._loop.name}"
-        # We are now creating a koiled loop for this context
-        self._loop = get_threaded_loop(
-            getattr(
-                self,
-                "name",
-                f"KoiledLoop {'governed by' + self.creating_instance.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
-            ),
-            uvify=getattr(self, "uvify", True),
-        )
-        current_loop.set(self._loop)
+        self._loop = None
+        _loop = current_loop.get()
+        if _loop is None:
+            # We are now creating a koiled loop for this context
+            self._loop = get_threaded_loop(
+                getattr(
+                    self,
+                    "name",
+                    f"KoiledLoop {'governed by' + self.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
+                ),
+                uvify=getattr(self, "uvify", True),
+            )
+            current_loop.set(self._loop)
         self.running = True
         return self
 
@@ -144,25 +143,25 @@ class KoilMixin:
         loop.stop()
 
     def __exit__(self, *args, **kwargs):
-        asyncio.run_coroutine_threadsafe(self.__aloop_close(), self._loop)
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
-        iterations = 0
+            iterations = 0
 
-        while self._loop.is_running():
-            time.sleep(0.001)
-            iterations += 1
-            if iterations == 100:
-                logger.warning(
-                    "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
-                )
+            while self._loop.is_running():
+                time.sleep(0.001)
+                iterations += 1
+                if iterations == 100:
+                    logger.warning(
+                        "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
+                    )
 
-        current_loop.set(None)
+            current_loop.set(None)
         self.running = False
 
 
 @dataclass
 class Koil(KoilMixin):
-    creating_instance: Optional[Any] = None
     "The instance that created this class through entering"
 
     uvify: bool = False
