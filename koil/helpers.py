@@ -18,9 +18,24 @@ import contextvars
 import time
 import logging
 from .process import unkoil_process_gen, unkoil_process_func, is_in_process
+from typing import Callable, TypeVar
+
+try:
+    from typing import ParamSpec
+except ImportError:
+    from typing_extensions import ParamSpec
 
 
-def unkoil_gen(iterator, *args, **kwargs):
+from typing import Coroutine, Any, Union, Optional, Awaitable, AsyncIterator, Iterator
+
+P = ParamSpec("P")
+T = TypeVar("T")
+R = TypeVar("R")
+
+
+def unkoil_gen(
+    iterator: Callable[P, AsyncIterator[R]], *args: P.args, **kwargs: P.kwargs
+) -> Iterator[R]:
     if is_in_process():
         for i in unkoil_process_gen(iterator, args, kwargs):
             yield i
@@ -80,7 +95,14 @@ def unkoil_gen(iterator, *args, **kwargs):
         next_args = yield obj
 
 
-def unkoil(coro, *args, **kwargs):
+def unkoil(
+    coro: Union[
+        Callable[P, Coroutine[Any, Any, R]],
+        Callable[P, Awaitable[R]],
+    ],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
     if is_in_process():
         return unkoil_process_func(coro, args, kwargs)
 
@@ -136,14 +158,14 @@ def unkoil(coro, *args, **kwargs):
 
 
 async def run_spawned(
-    sync_func,
-    *sync_args,
+    sync_func: Callable[P, R],
+    *sync_args: P.args,
     executor=None,
     pass_context=False,
     pass_loop=True,
     cancel_timeout=None,
-    **sync_kwargs,
-):
+    **sync_kwargs: P.kwargs,
+) -> R:
     """
     Spawn a thread with a given sync function and arguments
     """
@@ -212,14 +234,14 @@ async def run_spawned(
 
 
 async def iterate_spawned(
-    sync_gen,
-    *sync_args,
+    sync_gen: Callable[P, Iterator[R]],
+    *sync_args: P.args,
     executor=None,
     pass_context=False,
     pass_loop=True,
     cancel_timeout=None,
-    **sync_kwargs,
-):
+    **sync_kwargs: P.kwargs,
+) -> R:
     """
     Spawn a thread with a given sync function and arguments
     """
@@ -327,20 +349,18 @@ async def iterate_spawned(
 
 
 async def run_processed(
-    func,
-    *args,
-    _omit_vars=None,
-    _silent_errrors=True,
-    **kwargs,
-):
-    async with KoiledProcess(omit_vars=_omit_vars, silent_errors=_silent_errrors) as p:
+    func: Callable[P, R],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    async with KoiledProcess() as p:
         return await p.call(func, *args, **kwargs)
 
 
 async def iterate_processed(
-    func, *args, _omit_vars=None, _silent_errrors=True, **kwargs
-):
-    async with KoiledProcess(omit_vars=_omit_vars, silent_errors=_silent_errrors) as p:
+    func: Callable[P, Iterator[R]], *args: P.args, **kwargs: P.kwargs
+) -> AsyncIterator[R]:
+    async with KoiledProcess() as p:
         async for i in p.iter(func, *args, **kwargs):
             yield i
 

@@ -34,45 +34,6 @@ def matches_suffixes(name, suffixes):
     return False
 
 
-def serialize_context(omit_vars=None, omit_suffixes=None, silent_errors=True):
-    copy = contextvars.copy_context()
-
-    send_context = {}
-    omit_suffixes = omit_suffixes or ["_unpickkable"]
-
-    for ctx, value in copy.items():
-        if ctx.name in send_context:
-            raise KoilError(
-                f"Context variable {ctx.name} is used multiple times. This will lead to unexpected behaviour. Please rename the variable."
-            )
-
-        if omit_vars and ctx.name in omit_vars:
-            continue
-
-        if matches_suffixes(ctx.name, omit_suffixes):
-            continue
-        try:
-            send_context[ctx.name] = cloudpickle.dumps(value)
-        except Exception as e:
-            if silent_errors:
-                continue
-            else:
-                raise KoilError(
-                    f"Could not serialize context variable {ctx.name}"
-                ) from e
-
-    return send_context
-
-
-def deserialize_context(context):
-    x = contextvars.copy_context()
-    print(context)
-    for ctx, value in x.items():
-        print(ctx.name)
-        if ctx.name in context:
-            ctx.set(cloudpickle.loads(context[ctx.name]))
-
-
 def unkoil_process_gen(iterator, args, kwargs):
     input_queue = input_queue_context.get()
     out_queue = output_queue_context.get()
@@ -136,18 +97,16 @@ def worker(input_queue, output_queue):
         # Wait for a task
         task, func_args_kwargs_return_exception = get_from_queue(input_queue)
         if task == CALL:
-            func, context, args, kwargs = func_args_kwargs_return_exception
+            func, args, kwargs = func_args_kwargs_return_exception
             try:
-                deserialize_context(context)
                 result = func(*args, **kwargs)
                 send_to_queue(output_queue, RETURN, result)
             except Exception as e:
                 send_to_queue(output_queue, EXCEPTION, e)
 
         if task == ITER:
-            gen, context, args, kwargs = func_args_kwargs_return_exception
+            gen, args, kwargs = func_args_kwargs_return_exception
             try:
-                deserialize_context(context)
                 gen_runner(output_queue, gen, *args, **kwargs)
                 send_to_queue(output_queue, DONE, None)
             except Exception as e:
@@ -172,7 +131,7 @@ def worker(input_queue, output_queue):
 class KoiledProcess:
     """A class that allows to call functions in a separate process."""
 
-    def __init__(self, max_workers=1, omit_vars=None, silent_errors=True):
+    def __init__(self, max_workers=1):
         """Create a new KoiledProcess.
 
         Args:
@@ -189,8 +148,6 @@ class KoiledProcess:
         self.worker_process = multiprocessing.Process(
             target=worker, args=(self.input_queue, self.output_queue)
         )
-        self.omit_vars = omit_vars
-        self.silent_errors = silent_errors
 
         self.loop = asyncio.get_event_loop()
         self.loop.run_in_executor
@@ -210,17 +167,11 @@ class KoiledProcess:
             self.executor, get_from_queue, self.output_queue
         )
 
-    def serialize_context(self):
-        return serialize_context(
-            omit_vars=self.omit_vars, silent_errors=self.silent_errors
-        )
-
     async def call(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
-        context = self.serialize_context()
         try:
-            send_to_queue(self.input_queue, CALL, (func, context, args, kwargs))
+            send_to_queue(self.input_queue, CALL, (func, args, kwargs))
 
             # Wait for the result and then execute the callback
             while True:
@@ -262,10 +213,8 @@ class KoiledProcess:
     async def iter(self, func, *args, **kwargs):
         assert self.started, "You need to start the KoilProcess first"
         # Send the function and arguments to the worker process
-
-        context = self.serialize_context()
         try:
-            send_to_queue(self.input_queue, ITER, (func, context, args, kwargs))
+            send_to_queue(self.input_queue, ITER, (func, args, kwargs))
 
             # Wait for the result and then execute the callback
             while True:

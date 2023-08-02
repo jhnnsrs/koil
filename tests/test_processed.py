@@ -140,15 +140,3 @@ async def test_spawn_process_back_raise_calling_gen():
         with pytest.raises(Exception, match="This is an iterate and raise exception"):
             async for i in iterate_processed(back_calling_raising_gen, 1, number=2):
                 assert i == 3, "Process should run and yield 3"
-
-
-async def test_context_var():
-    async with Koil():
-        t.set(1)
-        assert (
-            await run_processed(context_vars, _silent_errrors=False) == 1
-        ), "Process should run and return correct context"
-        t.set(5)
-        assert (
-            await run_processed(context_vars, _silent_errrors=False) == 5
-        ), "Process should run and return 1"
