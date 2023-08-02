@@ -137,11 +137,6 @@ class KoilMixin:
         self.running = True
         return self
 
-    async def __aloop_close(self):
-        loop = asyncio.get_event_loop()
-        logger.debug("Causing loop to stop")
-        loop.stop()
-
     def __exit__(self, *args, **kwargs):
         if self._loop:
             self._loop.call_soon_threadsafe(self._loop.stop)

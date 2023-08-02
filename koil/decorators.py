@@ -38,9 +38,6 @@ def koilable(
             cls.__aexit__
         ), "__aexit__ must be a coroutine (awaitable)"
 
-        def ___get_koiled_loop(self):
-            return getattr(self, fieldname)
-
         def koiled_enter(self, *args, **kwargs):
             potential_koiled_loop = current_loop.get()
             if potential_koiled_loop is not None:
@@ -73,7 +70,6 @@ def koilable(
             cls.aenter = aenter
             cls.exit = koiled_exit
             cls.enter = koiled_enter
-            cls.__get_koiled_loop = ___get_koiled_loop
 
         return cls
 
