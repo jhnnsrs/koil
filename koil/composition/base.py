@@ -22,24 +22,6 @@ class PedanticKoil(BaseModel, KoilMixin):
     _token = None
     _loop = None
 
-    @root_validator()
-    @classmethod
-    def check_not_running_in_koil(cls, values):
-        if current_loop.get() is not None:
-            raise ValueError(
-                f"You are already running in a Koil Loop. You cannot run a Koil Loop inside another Koil Loop. {current_loop.get()}"
-            )
-        try:
-            asyncio.get_running_loop()
-            if not values["sync_in_async"]:
-                raise ValueError(
-                    "Please use async instead. Or set Koil to sync_in_async=True"
-                )
-        except RuntimeError:
-            pass
-
-        return values
-
     def _repr_html_inline_(self):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
 
@@ -50,7 +32,7 @@ class PedanticKoil(BaseModel, KoilMixin):
 
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)
 class KoiledModel(BaseModel):
-    koil: Optional[PedanticKoil]
+    koil: PedanticKoil = Field(default_factory=PedanticKoil, exclude=True)
 
     def __enter__(self: T) -> T:
         ...

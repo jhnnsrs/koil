@@ -76,7 +76,7 @@ def run_threaded_event_loop(loop):
 
 
 def get_threaded_loop(name="KoilLoop", uvify=True):
-    """Creates a new event loop and run it in a new thread."""
+    """Creates a new event loop and run it in a new threads"""
     with _selector_policy(uvify=uvify):
         newloop = asyncio.new_event_loop()
 

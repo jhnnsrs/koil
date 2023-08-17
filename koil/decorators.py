@@ -3,6 +3,7 @@ from koil.koil import Koil
 import inspect
 from typing import Callable, Type, TypeVar
 from koil.vars import current_loop
+from koil.errors import KoilError
 import logging
 
 T = TypeVar("T")
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 def koilable(
     fieldname: str = "__koil",
     add_connectors: bool = False,
+    init_koil: bool = True,
     koil_class: Type[Koil] = Koil,
     **koilparams,
 ) -> Callable[[Type[T]], Type[T]]:
@@ -23,6 +25,7 @@ def koilable(
     Args:
         fieldname (str, optional): The name of the field to store the koil instance. Defaults to "__koil".
         add_connectors (bool, optional): If True, it will add the connectors to the class. Defaults to False.
+        init_koil (bool, optional): If True, it will initialize the koil instance on the field if it is None. Defaults to True.
         koil_class (Type[Koil], optional): The class of the koil to use. Defaults to Koil.
 
     """
@@ -41,13 +44,21 @@ def koilable(
         def koiled_enter(self, *args, **kwargs):
             potential_koiled_loop = current_loop.get()
             if potential_koiled_loop is not None:
+                # We are in a koiled loop no need to koil again
                 return unkoil(self.__aenter__, *args, **kwargs)
             else:
-                setattr(
-                    self,
-                    fieldname,
-                    koil_class(name=f"{repr(self)}", **koilparams),
-                )
+                if not hasattr(self, fieldname) or getattr(self, fieldname) is None:
+                    if init_koil:
+                        setattr(
+                            self,
+                            fieldname,
+                            koil_class(name=f"{repr(self)}", **koilparams),
+                        )
+                    else:
+                        raise KoilError(
+                            f"Does not have a koil instance on {fieldname} and init_koil is False"
+                        )
+
                 getattr(self, fieldname).__enter__()
                 return unkoil(self.__aenter__, *args, **kwargs)
 
