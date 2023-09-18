@@ -4,7 +4,7 @@ import inspect
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
@@ -43,9 +43,18 @@ class QtFuture:
         if not args:
             args = (None,)
         ctx = contextvars.copy_context()
+
+        if self.aiofuture.done():
+            logger.warning(f"QtFuture {self} already done. Cannot resolve")
+            return
+
         self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,) + args)
 
     def reject(self, exp: Exception):
+        if self.aiofuture.done():
+            logger.warning(f"QtFuture {self} already done. Could not reject")
+            return
+
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
 
 
@@ -106,7 +115,7 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         super().__init__(*args, **kwargs)
         assert not inspect.iscoroutinefunction(
             coro
-        ), "This should not be a coroutine, but a normal qt slot with the first parameter being a qtfuture"
+        ), f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve == False else ''}"
         self.coro = coro
         self.called.connect(self.on_called)
         self.autoresolve = autoresolve
@@ -241,6 +250,9 @@ class QtRunner(KoilRunner, QtCore.QObject):
         )
         return KoilFuture(future, cancel_event)
 
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        return self.run(*args, **kwds)
+
 
 class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
     errored = QtCore.Signal(Exception)
@@ -312,6 +324,18 @@ class QtKoilMixin(KoilMixin):
 
 def async_generator_to_qt(func):
     return QtGeneratorRunner(func)
+
+
+def async_to_qt(func):
+    return QtRunner(func)
+
+
+def qt_to_async(func, autoresolve=False, use_context=True):
+    return QtCoro(func, autoresolve=autoresolve, use_context=use_context).acall
+
+
+def qtgenerator_to_async(func):
+    return QtGenerator(func)
 
 
 class WrappedObject(QtCore.QObject):
