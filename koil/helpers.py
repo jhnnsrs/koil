@@ -6,7 +6,6 @@ from koil.errors import (
     KoilError,
     KoilStopIteration,
     ThreadCancelledError,
-    ProcessCancelledError,
 )
 from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
@@ -26,7 +25,7 @@ except ImportError:
     from typing_extensions import ParamSpec
 
 
-from typing import Coroutine, Any, Union, Optional, Awaitable, AsyncIterator, Iterator
+from typing import Coroutine, Any, Union, Awaitable, AsyncIterator, Iterator
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -292,7 +291,7 @@ async def iterate_spawned(
                 sync_yield_queue.put(res)
                 args = sync_next_queue.get()
                 sync_next_queue.task_done()
-            except StopIteration as e:
+            except StopIteration:
                 raise KoilStopIteration("Thread stopped")
             except Exception as e:
                 logging.info("Exception in generator", exc_info=True)

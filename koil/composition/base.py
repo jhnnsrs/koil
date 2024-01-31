@@ -1,11 +1,7 @@
-import asyncio
-from pydantic import BaseModel, Field, root_validator
-from dataclasses import field
+from pydantic import BaseModel, Field
 from koil.decorators import koilable
-from typing import Optional, TypeVar
-from koil.vars import *
-from koil.errors import *
-from koil.koil import *
+from typing import Optional, TypeVar, Any
+from koil.koil import KoilMixin
 
 T = TypeVar("T")
 

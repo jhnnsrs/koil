@@ -74,5 +74,3 @@ def test_iterating():
         assert next(x) == 1
         assert next(x) == 2
         assert next(x) == 3
-
-

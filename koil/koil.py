@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import os
 import sys
 import threading
-from typing import Any, Optional
 
 from koil.errors import ContextError
 from koil.vars import current_loop
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import uvloop
-except:
+except ImportError:
     uvloop = None
 
 
@@ -93,9 +92,6 @@ class KoilMixin:
     def exit(self):
         return self.__exit__(None, None, None)
 
-    async def aexit(self):
-        return await self.__aexit__(None, None, None)
-
     async def aenter(self):
         return await self.__aenter__()
 
@@ -116,7 +112,10 @@ class KoilMixin:
             asyncio.get_running_loop()
             if not hasattr(self, "sync_in_async") or self.sync_in_async is False:
                 raise ContextError(
-                    "You are running in asyncio event loop already. Using koil makes no sense here, use asyncio instead. If this happens in a context manager, you probably forgot to use the `async with` syntax."
+                    f"""You are running in asyncio event loop already. 
+                    Using koil makes no sense here, use asyncio instead. You can use koil in a sync context by setting `sync_in_async=True` currently it is
+                    set to {getattr(self, "sync_in_async", None)}.
+                    If this happens in a context manager, you probably forgot to use the `async with` syntax."""
                 )
         except RuntimeError:
             pass

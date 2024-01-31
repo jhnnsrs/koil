@@ -1,9 +1,8 @@
 from .vars import output_queue_context, input_queue_context, in_process_context
-import contextvars
 import multiprocessing
 
 from .errors import ProcessCancelledError, KoilError
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
 

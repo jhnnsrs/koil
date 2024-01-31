@@ -43,7 +43,7 @@ class X(object):
         for i in range(2):
             a = self.a("v")
             check_cancelled()
-            t = yield a
+            yield a
 
     @unkoilable
     async def a(self, a):
@@ -56,7 +56,7 @@ class X(object):
 
     async def g(self):
         async for i in iterate_spawned(self.sleep_and_yield, "haha", cancel_timeout=3):
-            x = yield i + "33"
+            yield i + "33"
 
     async def __aenter__(self):
         return self
@@ -73,16 +73,16 @@ async def test_async():
             x.cancel()
             try:
                 x = await x
-            except asyncio.CancelledError as e:
+            except asyncio.CancelledError:
                 pass
 
 
 def test_x_sync():
     with X(1) as x:
-        l = unkoil_gen(x.g)
-        l.send(None)
-        l.send(None)
+        sender = unkoil_gen(x.g)
+        sender.send(None)
+        sender.send(None)
         try:
-            l.send(None)
+            sender.send(None)
         except StopIteration:
             pass

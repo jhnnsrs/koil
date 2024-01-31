@@ -42,7 +42,7 @@ class KoilFuture:
 
         if wait:
             try:
-                done = self.future.result()
+                self.future.result()
                 raise RuntimeError("Task was cancelled but returned a result")
             except CancelledError:
                 return True
@@ -144,7 +144,6 @@ class KoilGeneratorRunner(Generic[P, T]):
         assert loop is not None, "No koiled loop found"
         assert loop.is_running(), "Loop is not running"
         assert not loop.is_closed(), "Loop is closed"
-        ait = self.iterator(*self.args, **self.kwargs).__aiter__()
-        res = [False, False]
-        cancel_event = current_cancel_event.get()
+        self.iterator(*self.args, **self.kwargs).__aiter__()
+        current_cancel_event.get()
         raise NotImplementedError("No design decision was taken")

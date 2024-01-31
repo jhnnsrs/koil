@@ -1,10 +1,11 @@
-from koil.helpers import unkoil
+from koil.helpers import unkoil, unkoil_gen
 from koil.koil import Koil
 import inspect
 from typing import Callable, Type, TypeVar
 from koil.vars import current_loop
 from koil.errors import KoilError
 import logging
+from .utils import check_is_asyncfunc, check_is_asyncgen
 
 T = TypeVar("T")
 
@@ -88,7 +89,29 @@ def koilable(
 
 
 def unkoilable(func):
-    def wrapper(*args, **kwargs):
-        return unkoil(func, *args, **kwargs)
+    """Decorator to make a function unkoilable
 
-    return wrapper
+    Args:
+        func (Callable): The function to run in the koil loop
+
+    Raises:
+        TypeError: If the function is not a coroutine
+
+    """
+
+    if not check_is_asyncgen(func) and not check_is_asyncfunc(func):
+        raise TypeError("Function must be a coroutine")
+
+    if check_is_asyncgen(func):
+
+        def wrapper(*args, **kwargs):
+            return unkoil_gen(func, *args, **kwargs)
+
+        return wrapper
+
+    else:
+
+        def wrapper(*args, **kwargs):
+            return unkoil(func, *args, **kwargs)
+
+        return wrapper

@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-from koil.errors import ContextError
 
 from koil.helpers import unkoil, unkoil_gen, run_processed, iterate_processed
 from .context import AsyncContextManager
@@ -67,6 +66,7 @@ def context_vars():
     return t.get()
 
 
+@pytest.mark.process
 async def test_spawn_process_func():
     async with Koil():
         assert (
@@ -74,6 +74,7 @@ async def test_spawn_process_func():
         ), "Process should run and return 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_exception_func():
     async with Koil():
         with pytest.raises(Exception, match="This is a test exception"):
@@ -82,6 +83,7 @@ async def test_spawn_process_exception_func():
             ), "Process should run and return 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_back_calling_func():
     async with Koil():
         assert (
@@ -89,6 +91,7 @@ async def test_spawn_process_back_calling_func():
         ), "Process should run and return 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_back_raise_calling_func():
     async with Koil():
         with pytest.raises(Exception, match="This is a sleep and raise exception"):
@@ -116,12 +119,14 @@ def back_calling_raising_gen(arg: int, number: int):
         yield arg + number
 
 
+@pytest.mark.process
 async def test_spawn_process_gen():
     async with Koil():
         async for i in iterate_processed(process_gen, 1, number=2):
             assert i == 3, "Process should run and yield 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_exception_gen():
     async with Koil():
         with pytest.raises(Exception, match="This is a test exception"):
@@ -129,12 +134,14 @@ async def test_spawn_process_exception_gen():
                 assert i == 3, "Process should run and yield 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_back_calling_gen():
     async with Koil():
         async for i in iterate_processed(back_calling_gen, 1, number=2):
             assert i == 3, "Process should run and yield 3"
 
 
+@pytest.mark.process
 async def test_spawn_process_back_raise_calling_gen():
     async with Koil():
         with pytest.raises(Exception, match="This is an iterate and raise exception"):
