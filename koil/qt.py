@@ -4,11 +4,10 @@ import inspect
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar, Awaitable
 
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
-from functools import partial
 from koil.koil import Koil, KoilMixin
 from koil.task import KoilFuture, KoilGeneratorRunner, KoilRunner, KoilYieldFuture
 from koil.utils import (
@@ -17,6 +16,10 @@ from koil.utils import (
 )
 from koil.vars import current_loop
 import uuid
+from typing import Protocol
+from .utils import check_is_asyncfunc, check_is_asyncgen, check_is_syncgen
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +29,6 @@ Reference = str
 
 class UnconnectedSignalError(Exception):
     pass
-
-
-def get_receiver_length(qobject, qsignal, callstring):
-    try:
-        return qobject.receivers(qsignal)
-    except:
-        return qobject.receivers(callstring)
 
 
 class QtFuture:
@@ -50,9 +46,18 @@ class QtFuture:
         if not args:
             args = (None,)
         ctx = contextvars.copy_context()
+
+        if self.aiofuture.done():
+            logger.warning(f"QtFuture {self} already done. Cannot resolve")
+            return
+
         self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,) + args)
 
     def reject(self, exp: Exception):
+        if self.aiofuture.done():
+            logger.warning(f"QtFuture {self} already done. Could not reject")
+            return
+
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
 
 
@@ -113,7 +118,7 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         super().__init__(*args, **kwargs)
         assert not inspect.iscoroutinefunction(
             coro
-        ), "This should not be a coroutine, but a normal qt slot with the first parameter being a qtfuture"
+        ), f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
         self.coro = coro
         self.called.connect(self.on_called)
         self.autoresolve = autoresolve
@@ -163,15 +168,6 @@ class QtListener:
 
     def __call__(self, *args):
         self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
-
-
-class Iterator:
-    def __init__(self, queue, timeout=None) -> None:
-        self.queue = queue
-        self.timeout = timeout
-
-    def __anext__(self):
-        return self.next()
 
 
 class QtSignal(QtCore.QObject, Generic[T, P]):
@@ -257,6 +253,9 @@ class QtRunner(KoilRunner, QtCore.QObject):
         )
         return KoilFuture(future, cancel_event)
 
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        return self.run(*args, **kwds)
+
 
 class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
     errored = QtCore.Signal(Exception)
@@ -326,6 +325,122 @@ class QtKoilMixin(KoilMixin):
         return self
 
 
+def async_generator_to_qt(func):
+    return QtGeneratorRunner(func)
+
+
+def async_to_qt(func):
+    return QtRunner(func)
+
+
+def qt_to_async(func, autoresolve=False, use_context=True):
+    return QtCoro(func, autoresolve=autoresolve, use_context=use_context).acall
+
+
+def qtgenerator_to_async(func):
+    return QtGenerator(func)
+
+
+class UnkoiledQt(Protocol):
+    errored: QtCore.Signal
+    cancelled: QtCore.Signal()
+    yielded: QtCore.Signal
+    done: QtCore.Signal
+    returned: QtCore.Signal
+
+    def run(self, *args, **kwargs) -> KoilFuture:
+        """ Runs the function in the governing loop and returns a KoilFuture
+        
+        This is useful if you want to cancel the function from the outside.
+        The function will be run in the governing loop and the result will be
+        send to the main thread via a QtSignal.
+        
+        Args:
+            *args: The arguments for the function
+            **kwargs: The keyword arguments for the function
+
+        Returns:
+            KoilFuture: The future that can be cancelled
+        
+        """
+        ...
+
+
+class KoilQt(Protocol):
+    errored: QtCore.Signal
+    cancelled: QtCore.Signal()
+    yielded: QtCore.Signal
+    done: QtCore.Signal
+    returned: QtCore.Signal
+
+    def run(self, *args, **kwargs) -> KoilFuture:
+        """ Runs the function in the governing loop and returns a KoilFuture
+        
+        This is useful if you want to cancel the function from the outside.
+        The function will be run in the governing loop and the result will be
+        send to the main thread via a QtSignal.
+        
+        Args:
+            *args: The arguments for the function
+            **kwargs: The keyword arguments for the function
+
+        Returns:
+            KoilFuture: The future that can be cancelled
+        
+        """
+        ...
+
+
+
+def unkoilqt(func, *args, **kwargs) -> UnkoiledQt:
+    """ Unkoils a function so that it can be run in the main thread
+
+    Args:
+        func (Callable): The function to run in the main thread
+
+      
+       
+    """
+
+    if not (check_is_asyncgen(func) or check_is_asyncfunc(func)):
+        raise TypeError(f"{func} is not an async function")
+
+    if check_is_asyncgen(func):
+        return async_generator_to_qt(func,  *args, **kwargs)
+    
+    else:
+        return async_to_qt(func, *args, **kwargs)
+    
+
+def koilqt(func, *args, autoresolve=None, **kwargs) -> Callable[..., Awaitable[Any]]:
+    """ Converts a qt mainthread function to be run in the asyncio loop
+    
+    Args:
+        func (Callable): The function to run in the main thread (can also
+        be a generator)
+
+    Returns:
+        Callable[..., Awaitable[Any]]: The function that can be run in the
+        asyncio loop
+    
+    """
+ 
+    if check_is_asyncgen(func) or check_is_asyncfunc(func):
+        raise TypeError(f"{func} should NOT be a coroutine function. This is a decorator to convert a function to be callable form the asyncio loop")
+    
+    if check_is_syncgen(func):
+        if autoresolve is not None or autoresolve is True:
+            raise TypeError("Cannot autoresolve a generator")
+        return qtgenerator_to_async(func, *args, **kwargs)
+    
+    else:
+        if autoresolve is None:
+            autoresolve = True
+        return qt_to_async(func, *args, autoresolve=autoresolve, **kwargs)
+
+
+
+
 class WrappedObject(QtCore.QObject):
     def __init__(self, *args, koil: Koil = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -357,12 +472,10 @@ class QtKoil(QtKoilMixin):
     class Config:
         arbitrary_types_allowed = True
 
-    def create_task(self, coro, *args, **kwargs) -> QtFuture:
-        logger.warning(
-            """Creating a task within the qt loop is not recommended. As this might lead to deathlocks and other bad things. (Especially when calling qt back from the koil). Try to use a `create_runner`
-            and connect your signals to and then call the `run` method instead."""
-        )
-        return coro(*args, **kwargs, as_task=True).run()
 
-    def create_runner(self, coro, *args, **kwargs) -> QtRunner:
-        return coro(*args, **kwargs, as_task=True)
+
+def create_qt_koil(parent, auto_enter: bool=True) -> QtKoil:
+    koil =  QtKoil(parent=parent)
+    if auto_enter:
+        koil.enter()
+    return koil

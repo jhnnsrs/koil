@@ -4,7 +4,40 @@ import concurrent.futures
 import threading
 from typing import Any, Callable
 from koil.errors import CancelledError
-import asyncio
+
+import inspect
+
+
+def check_is_asyncgen(func) -> bool:
+    """Checks if a function is an async generator"""
+    if inspect.isasyncgenfunction(func):
+        return True
+
+    return False
+
+
+def check_is_asyncfunc(func) -> bool:
+    """Checks if a function is an async function"""
+    if inspect.iscoroutinefunction(func):
+        return True
+
+    return False
+
+
+def check_is_syncgen(func) -> bool:
+    """Checks if a function is an async generator"""
+    if inspect.isgeneratorfunction(func):
+        return True
+
+    return False
+
+
+def check_is_syncfunc(func) -> bool:
+    """Checks if a function is an async function"""
+    if inspect.isfunction(func):
+        return True
+
+    return False
 
 
 async def check_event(event: threading.Event):

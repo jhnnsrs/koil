@@ -1,8 +1,9 @@
 import asyncio
 from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtCoro, QtFuture, QtGenerator, QtGeneratorRunner, QtKoil, QtRunner
+from koil.qt import QtFuture, QtGenerator, QtKoil
 import contextvars
 import pytest
+from koil.qt import unkoilqt, koilqt
 
 x = contextvars.ContextVar("x")
 
@@ -60,16 +61,16 @@ class KoiledInterferingWidget(QtWidgets.QWidget):
         self.call_raise_button = QtWidgets.QPushButton("Call Raise")
         self.call_context_button = QtWidgets.QPushButton("Call Context")
 
-        self.sleep_and_resolve_task = QtRunner(sleep_and_resolve)
+        self.sleep_and_resolve_task = unkoilqt(sleep_and_resolve)
         self.sleep_and_resolve_task.returned.connect(self.task_finished)
 
-        self.sleep_and_use_context_task = QtRunner(sleep_and_use_context)
+        self.sleep_and_use_context_task = unkoilqt(sleep_and_use_context)
         self.sleep_and_use_context_task.returned.connect(self.task_finished)
 
-        self.sleep_and_yield_task = QtGeneratorRunner(sleep_and_yield)
+        self.sleep_and_yield_task = unkoilqt(sleep_and_yield)
         self.sleep_and_yield_task.yielded.connect(self.task_finished)
 
-        self.sleep_and_raise_task = QtRunner(sleep_and_raise)
+        self.sleep_and_raise_task = unkoilqt(sleep_and_raise)
         self.sleep_and_resolve_task.returned.connect(self.task_finished)
 
         self.greet_label = QtWidgets.QLabel("")
@@ -110,9 +111,9 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
         self.koil = QtKoil(parent=self)
         self.koil.enter()
 
-        self.do_me = QtCoro(self.in_qt_task)
+        self.do_me = koilqt(self.in_qt_task, autoresolve=False)
 
-        self.my_coro_task = QtRunner(self.call_coro)
+        self.my_coro_task = unkoilqt(self.call_coro)
         self.my_coro_task.returned.connect(self.task_finished)
 
         self.task_was_run = False
@@ -140,7 +141,7 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
         self.greet_label.setText("Hello!")
 
     async def call_coro(self):
-        await self.do_me.acall()
+        await self.do_me()
         self.coroutine_was_run = True
 
 
@@ -150,7 +151,7 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
         self.koil = QtKoil(parent=self)
         self.koil.enter()
 
-        self.my_coro_task = QtRunner(self.call_coro)
+        self.my_coro_task = unkoilqt(self.call_coro)
         self.my_coro_task.returned.connect(self.task_finished)
 
         self.task_was_run = False

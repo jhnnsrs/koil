@@ -1,6 +1,6 @@
 import asyncio
 import threading
-
+from .process import KoiledProcess
 import janus
 from koil.errors import (
     KoilError,
@@ -9,12 +9,37 @@ from koil.errors import (
 )
 from koil.task import KoilFuture, KoilRunner
 from koil.utils import run_threaded_with_context
-from koil.vars import *
+from koil.vars import (
+    current_loop,
+    current_cancel_event,
+)
+import contextvars
 import time
 import logging
+from .process import unkoil_process_gen, unkoil_process_func, is_in_process
+from typing import Callable, TypeVar
+
+try:
+    from typing import ParamSpec
+except ImportError:
+    from typing_extensions import ParamSpec
 
 
-def unkoil_gen(iterator, *args, **kwargs):
+from typing import Coroutine, Any, Union, Awaitable, AsyncIterator, Iterator
+
+P = ParamSpec("P")
+T = TypeVar("T")
+R = TypeVar("R")
+
+
+def unkoil_gen(
+    iterator: Callable[P, AsyncIterator[R]], *args: P.args, **kwargs: P.kwargs
+) -> Iterator[R]:
+    if is_in_process():
+        for i in unkoil_process_gen(iterator, args, kwargs):
+            yield i
+
+        return
 
     loop = current_loop.get()
     try:
@@ -69,7 +94,17 @@ def unkoil_gen(iterator, *args, **kwargs):
         next_args = yield obj
 
 
-def unkoil(coro, *args, **kwargs):
+def unkoil(
+    coro: Union[
+        Callable[P, Coroutine[Any, Any, R]],
+        Callable[P, Awaitable[R]],
+    ],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    if is_in_process():
+        return unkoil_process_func(coro, args, kwargs)
+
     loop = current_loop.get()
     try:
         loop0 = asyncio.events.get_running_loop()
@@ -122,14 +157,14 @@ def unkoil(coro, *args, **kwargs):
 
 
 async def run_spawned(
-    sync_func,
-    *sync_args,
+    sync_func: Callable[P, R],
+    *sync_args: P.args,
     executor=None,
     pass_context=False,
     pass_loop=True,
     cancel_timeout=None,
-    **sync_kwargs,
-):
+    **sync_kwargs: P.kwargs,
+) -> R:
     """
     Spawn a thread with a given sync function and arguments
     """
@@ -198,14 +233,14 @@ async def run_spawned(
 
 
 async def iterate_spawned(
-    sync_gen,
-    *sync_args,
+    sync_gen: Callable[P, Iterator[R]],
+    *sync_args: P.args,
     executor=None,
     pass_context=False,
     pass_loop=True,
     cancel_timeout=None,
-    **sync_kwargs,
-):
+    **sync_kwargs: P.kwargs,
+) -> R:
     """
     Spawn a thread with a given sync function and arguments
     """
@@ -256,7 +291,7 @@ async def iterate_spawned(
                 sync_yield_queue.put(res)
                 args = sync_next_queue.get()
                 sync_next_queue.task_done()
-            except StopIteration as e:
+            except StopIteration:
                 raise KoilStopIteration("Thread stopped")
             except Exception as e:
                 logging.info("Exception in generator", exc_info=True)
@@ -278,7 +313,6 @@ async def iterate_spawned(
 
     try:
         while True:
-
             it_task = asyncio.create_task(yield_queue.async_q.get())
 
             finish, unfinished = await asyncio.wait(
@@ -311,6 +345,23 @@ async def iterate_spawned(
         )
 
         raise e
+
+
+async def run_processed(
+    func: Callable[P, R],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    async with KoiledProcess() as p:
+        return await p.call(func, *args, **kwargs)
+
+
+async def iterate_processed(
+    func: Callable[P, Iterator[R]], *args: P.args, **kwargs: P.kwargs
+) -> AsyncIterator[R]:
+    async with KoiledProcess() as p:
+        async for i in p.iter(func, *args, **kwargs):
+            yield i
 
 
 def create_task(coro, *args, **kwargs) -> KoilFuture:
