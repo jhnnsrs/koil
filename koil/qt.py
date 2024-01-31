@@ -19,6 +19,8 @@ import uuid
 from typing import Protocol
 from .utils import check_is_asyncfunc, check_is_asyncgen, check_is_syncgen
 
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -347,19 +349,19 @@ class UnkoiledQt(Protocol):
     returned: QtCore.Signal
 
     def run(self, *args, **kwargs) -> KoilFuture:
-        """Runs the function in the governing loop and returns a KoilFuture
-
+        """ Runs the function in the governing loop and returns a KoilFuture
+        
         This is useful if you want to cancel the function from the outside.
         The function will be run in the governing loop and the result will be
         send to the main thread via a QtSignal.
-
+        
         Args:
             *args: The arguments for the function
             **kwargs: The keyword arguments for the function
 
         Returns:
             KoilFuture: The future that can be cancelled
-
+        
         """
         ...
 
@@ -372,46 +374,47 @@ class KoilQt(Protocol):
     returned: QtCore.Signal
 
     def run(self, *args, **kwargs) -> KoilFuture:
-        """Runs the function in the governing loop and returns a KoilFuture
-
+        """ Runs the function in the governing loop and returns a KoilFuture
+        
         This is useful if you want to cancel the function from the outside.
         The function will be run in the governing loop and the result will be
         send to the main thread via a QtSignal.
-
+        
         Args:
             *args: The arguments for the function
             **kwargs: The keyword arguments for the function
 
         Returns:
             KoilFuture: The future that can be cancelled
-
+        
         """
         ...
 
 
+
 def unkoilqt(func, *args, **kwargs) -> UnkoiledQt:
-    """Unkoils a function so that it can be run in the main thread
+    """ Unkoils a function so that it can be run in the main thread
 
     Args:
         func (Callable): The function to run in the main thread
 
-
-
+      
+       
     """
 
     if not (check_is_asyncgen(func) or check_is_asyncfunc(func)):
         raise TypeError(f"{func} is not an async function")
 
     if check_is_asyncgen(func):
-        return async_generator_to_qt(func, *args, **kwargs)
-
+        return async_generator_to_qt(func,  *args, **kwargs)
+    
     else:
         return async_to_qt(func, *args, **kwargs)
-
+    
 
 def koilqt(func, *args, autoresolve=None, **kwargs) -> Callable[..., Awaitable[Any]]:
-    """Converts a qt mainthread function to be run in the asyncio loop
-
+    """ Converts a qt mainthread function to be run in the asyncio loop
+    
     Args:
         func (Callable): The function to run in the main thread (can also
         be a generator)
@@ -419,23 +422,23 @@ def koilqt(func, *args, autoresolve=None, **kwargs) -> Callable[..., Awaitable[A
     Returns:
         Callable[..., Awaitable[Any]]: The function that can be run in the
         asyncio loop
-
+    
     """
-
+ 
     if check_is_asyncgen(func) or check_is_asyncfunc(func):
-        raise TypeError(
-            f"{func} should NOT be a coroutine function. This is a decorator to convert a function to be callable form the asyncio loop"
-        )
-
+        raise TypeError(f"{func} should NOT be a coroutine function. This is a decorator to convert a function to be callable form the asyncio loop")
+    
     if check_is_syncgen(func):
         if autoresolve is not None or autoresolve is True:
             raise TypeError("Cannot autoresolve a generator")
         return qtgenerator_to_async(func, *args, **kwargs)
-
+    
     else:
         if autoresolve is None:
             autoresolve = True
         return qt_to_async(func, *args, autoresolve=autoresolve, **kwargs)
+
+
 
 
 class WrappedObject(QtCore.QObject):
@@ -470,8 +473,9 @@ class QtKoil(QtKoilMixin):
         arbitrary_types_allowed = True
 
 
-def create_qt_koil(parent, auto_enter: bool = True) -> QtKoil:
-    koil = QtKoil(parent=parent)
+
+def create_qt_koil(parent, auto_enter: bool=True) -> QtKoil:
+    koil =  QtKoil(parent=parent)
     if auto_enter:
         koil.enter()
     return koil
