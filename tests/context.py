@@ -1,5 +1,9 @@
 import asyncio
 from koil.decorators import koilable, unkoilable
+import contextvars
+
+
+t = contextvars.ContextVar("t", default=0)
 
 
 @koilable()

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "koil"
-version = "0.2.14"
+version = "0.3.6"
 readme = "README.md"
 description = "Async for a sync world"
 authors = ["jhnnsrs <jhnnsrs@gmail.com>"]
@@ -8,14 +8,16 @@ license = "CC BY-NC 3.0"
 packages = [{ include = "koil" }]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = "^3.8"
 qtpy = { version = ">1", optional = true }
 uvloop = { version = "^0.16.0", optional = true }
 janus = "^1.0.0"
+cloudpickle = { version = "^2.2.1", optional = true }
 
 [tool.poetry.extras]
 qtpy = ["qt"]
 uvloop = ["uvloop"]
+process = ["cloudpickle"]
 
 
 [tool.poetry.group.dev.dependencies]
@@ -24,10 +26,12 @@ black = "^22.10.0"
 pytest-cov = "^4.0.0"
 pytest-qt = "^4.2.0"
 QtPy = "^2.3.0"
-PyQt5 = "^5.15.7"
 pytest-asyncio = "^0.20.2"
 pydantic = "^1.10.2"
 autoflake = "^1.7.7"
+cloudpickle = "^2.2.1"
+mypy = "^1.8.0"
+ruff = "^0.1.15"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -35,6 +39,9 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+qt_api = "pyqt5"
+markers = ["qt: marks tests that require a running qt application", "process: marks tests that require the process extra"]
+
 
 [[tool.pydoc-markdown.loaders]]
 type = "python"
@@ -44,3 +51,8 @@ search_path = ["koil"]
 [tool.pydoc-markdown.renderer]
 type = "docusaurus"
 docs_base_path = "website/docs"
+
+
+[tool.mypy]
+ignore_missing_imports = true
+strict = true

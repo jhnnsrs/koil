@@ -32,7 +32,7 @@ class X(object):
     def __init__(self, x):
         self.x = x
 
-    def sleep_and_call(self, nana):
+    def sleep_and_call(self, nana) -> str:
         time.sleep(0.04)
         y = self.a(nana, as_task=True).run()
         check_cancelled()
@@ -43,7 +43,7 @@ class X(object):
         for i in range(2):
             a = self.a("v")
             check_cancelled()
-            t = yield a
+            yield a
 
     @unkoilable
     async def a(self, a):
@@ -51,11 +51,12 @@ class X(object):
 
     @unkoilable
     async def t(self):
-        return "x" + await run_spawned(self.sleep_and_call, "haha", cancel_timeout=3)
+        f = await run_spawned(self.sleep_and_call, "haha", cancel_timeout=3)
+        return "x" + f
 
     async def g(self):
         async for i in iterate_spawned(self.sleep_and_yield, "haha", cancel_timeout=3):
-            x = yield i + "33"
+            yield i + "33"
 
     async def __aenter__(self):
         return self
@@ -65,7 +66,6 @@ class X(object):
 
 
 async def test_async():
-
     async with Koil():
         async with X(1) as x:
             x = asyncio.create_task(x.t())
@@ -73,18 +73,16 @@ async def test_async():
             x.cancel()
             try:
                 x = await x
-            except asyncio.CancelledError as e:
+            except asyncio.CancelledError:
                 pass
 
 
 def test_x_sync():
-
     with X(1) as x:
-        l = unkoil_gen(x.g)
-        l.send(None)
-        l.send(None)
-        print("Here")
+        sender = unkoil_gen(x.g)
+        sender.send(None)
+        sender.send(None)
         try:
-            l.send(None)
+            sender.send(None)
         except StopIteration:
             pass

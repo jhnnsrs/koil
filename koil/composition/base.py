@@ -1,11 +1,7 @@
-import asyncio
-from pydantic import BaseModel, Field, root_validator
-from dataclasses import field
+from pydantic import BaseModel, Field
 from koil.decorators import koilable
-from typing import Optional, TypeVar
-from koil.vars import *
-from koil.errors import *
-from koil.koil import *
+from typing import Optional, TypeVar, Any
+from koil.koil import KoilMixin
 
 T = TypeVar("T")
 
@@ -22,24 +18,6 @@ class PedanticKoil(BaseModel, KoilMixin):
     _token = None
     _loop = None
 
-    @root_validator()
-    @classmethod
-    def check_not_running_in_koil(cls, values):
-        if current_loop.get() is not None:
-            raise ValueError(
-                f"You are already running in a Koil Loop. You cannot run a Koil Loop inside another Koil Loop. {current_loop.get()}"
-            )
-        try:
-            asyncio.get_running_loop()
-            if not values["sync_in_async"]:
-                raise ValueError(
-                    "Please use async instead. Or set Koil to sync_in_async=True"
-                )
-        except RuntimeError:
-            pass
-
-        return values
-
     def _repr_html_inline_(self):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
 
@@ -50,7 +28,7 @@ class PedanticKoil(BaseModel, KoilMixin):
 
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)
 class KoiledModel(BaseModel):
-    koil: Optional[PedanticKoil]
+    koil: PedanticKoil = Field(default_factory=PedanticKoil, exclude=True)
 
     def __enter__(self: T) -> T:
         ...
@@ -82,8 +60,6 @@ class KoiledModel(BaseModel):
         copy_on_model_validation = "none"
 
 
-
-
 class Composition(KoiledModel):
     async def __aenter__(self: T) -> T:
         for key, value in self:
@@ -106,5 +82,3 @@ class Composition(KoiledModel):
             + "\n".join(["<tr><td>{}</td></tr>".format(key) for key, value in self])
             + "</table></div>"
         )
-
-    
