@@ -11,12 +11,12 @@ current_cancel_event = contextvars.ContextVar("current_cancel_event", default=No
 
 
 # Will only be set in the worker process
-output_queue_context: contextvars.ContextVar[
-    multiprocessing.Queue
-] = contextvars.ContextVar("out_queue_context")
-input_queue_context: contextvars.ContextVar[
-    multiprocessing.Queue
-] = contextvars.ContextVar("input_queue_context")
+output_queue_context: contextvars.ContextVar[multiprocessing.Queue] = (
+    contextvars.ContextVar("out_queue_context")
+)
+input_queue_context: contextvars.ContextVar[multiprocessing.Queue] = (
+    contextvars.ContextVar("input_queue_context")
+)
 in_process_context: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "in_process_context", default=False
 )
