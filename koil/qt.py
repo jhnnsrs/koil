@@ -29,22 +29,52 @@ Reference = str
 class UnconnectedSignalError(Exception):
     pass
 
+T = TypeVar("T")
 
-class QtFuture:
-    def __init__(self):
+class QtFuture(QtCore.QObject,Generic[T]):
+    """ A future that can be resolved in the Qt event loop
+    
+    Qt Futures are futures that can be resolved in the Qt event loop. They are
+    useful for functions that need to be resolved in the Qt event loop and are
+    not compatible with the asyncio event loop. 
+
+    QtFutures are generic and should be passed the type of the return value
+    when creating the future. This is useful for type hinting and for the
+    future to know what type of value to expect when it is resolved.
+
+    
+    
+    """
+    cancelled: QtCore.Signal = QtCore.Signal()
+
+
+
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
         self.aiofuture = asyncio.Future()
         self.iscancelled = False
+        self.resolved = False
+        self.rejected = False
 
     def _set_cancelled(self):
         """WIll be called by the asyncio loop"""
+        self.cancelled.emit()
         self.iscancelled = True
 
-    def resolve(self, *args):
+    @property
+    def done(self):
+        return self.resolved or self.rejected or self.iscancelled
+    
+
+
+    def resolve(self, *args: T):
         if not args:
             args = (None,)
         ctx = contextvars.copy_context()
+        self.resolved = True
 
         if self.aiofuture.done():
             logger.warning(f"QtFuture {self} already done. Cannot resolve")
@@ -56,6 +86,8 @@ class QtFuture:
         if self.aiofuture.done():
             logger.warning(f"QtFuture {self} already done. Could not reject")
             return
+        
+        self.rejected = True
 
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
 
@@ -64,8 +96,26 @@ class KoilStopIteration(Exception):
     pass
 
 
-class QtGenerator:
+
+T = TypeVar("T")
+
+class QtGenerator(QtCore.QObject, Generic[T]):
+    """A generator that can be run in the Qt event loop
+
+    Qt Generators are generators that can be run in the Qt event loop. They are
+    useful for functions that need to be run in the Qt event loop and are not
+    compatible with the asyncio event loop.
+
+    Qt Generators are generic and should be passed the type of the yield value
+    when creating the generator. This is useful for type hinting and for the
+    generator to know what type of value to expect when it is yielded.
+
+    """
+    cancelled: QtCore.Signal = QtCore.Signal()
+
     def __init__(self):
+        super().__init__()
+        self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
         self.aioqueue = asyncio.Queue()
         self.iscancelled = False
@@ -74,14 +124,15 @@ class QtGenerator:
         """WIll be called by the asyncio loop"""
         self.iscancelled = True
 
-    def next(self, *args):
-        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, *args)
+    def next(self, args: T):
+        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, args)
 
     def throw(self, exception):
         self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, exception)
 
     def stop(self):
         self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, KoilStopIteration())
+
 
     def __aiter__(self):
         return self
@@ -94,6 +145,7 @@ class QtGenerator:
             if isinstance(res, Exception):
                 raise res
         except asyncio.CancelledError:
+            self.cancelled.emit()
             raise StopAsyncIteration
         return res
 
@@ -160,6 +212,57 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
             raise
 
 
+class QtYielder(QtCore.QObject, Generic[T, P]):
+    called = QtCore.Signal(QtGenerator, tuple, dict, object)
+    cancelled = QtCore.Signal(QtGenerator)
+
+    def __init__(
+        self,
+        coro: Callable[P, T],
+        use_context=True,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        assert not inspect.isgeneratorfunction(
+            coro
+        ), f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+        self.coro = coro
+        self.called.connect(self.on_called)
+        self.use_context = use_context
+
+    def on_called(self, generator: QtGenerator, args, kwargs, ctx):
+        try:
+            self.coro(generator, *args, **kwargs)
+
+        except Exception as e:
+            logger.error(f"Error in QtYieldre {self.coro}", exc_info=True)
+            generator.throw(e)
+
+    async def aiterate(self, *args: P.args, timeout=None, **kwargs: P.kwargs):
+        generator = QtGenerator()
+        ctx = contextvars.copy_context()
+        self.called.emit(generator, args, kwargs, ctx)
+        try:
+            while True:
+
+                if timeout:
+                    x = await asyncio.wait_for(anext(generator), timeout=timeout)
+                else:
+                    x = await anext(generator)
+
+                yield x
+
+        except StopAsyncIteration:
+            pass
+            return
+
+        except asyncio.CancelledError:
+            generator._set_cancelled()
+            self.cancelled.emit(generator)
+            raise
+
+
+
 class QtListener:
     def __init__(self, loop, queue) -> None:
         self.queue = queue
@@ -215,10 +318,10 @@ class QtSignal(QtCore.QObject, Generic[T, P]):
 
 
 class QtRunner(KoilRunner, QtCore.QObject):
-    started = QtCore.Signal()
-    errored = QtCore.Signal(Exception)
-    cancelled = QtCore.Signal()
-    returned = QtCore.Signal(object)
+    started: QtCore.Signal = QtCore.Signal()
+    errored: QtCore.Signal = QtCore.Signal(Exception)
+    cancelled: QtCore.Signal = QtCore.Signal()
+    returned: QtCore.Signal = QtCore.Signal(object)
     _returnedwithoutcontext = QtCore.Signal(object, object)
 
     def __init__(self, *args, **kwargs):
@@ -342,7 +445,7 @@ def qtgenerator_to_async(func):
 
 class UnkoiledQt(Protocol):
     errored: QtCore.Signal
-    cancelled: QtCore.Signal()
+    cancelled: QtCore.Signal
     yielded: QtCore.Signal
     done: QtCore.Signal
     returned: QtCore.Signal
@@ -367,7 +470,7 @@ class UnkoiledQt(Protocol):
 
 class KoilQt(Protocol):
     errored: QtCore.Signal
-    cancelled: QtCore.Signal()
+    cancelled: QtCore.Signal
     yielded: QtCore.Signal
     done: QtCore.Signal
     returned: QtCore.Signal
@@ -476,3 +579,18 @@ def create_qt_koil(parent, auto_enter: bool = True) -> QtKoil:
     if auto_enter:
         koil.enter()
     return koil
+
+
+
+
+class KoiledQtMixin(QtCore.QObject):
+
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.koil = QtKoil(parent=self)
+        self.koil.enter()
+
+    def __del__(self):
+        self.koil.__exit__(None, None, None)
+        self.koil = None

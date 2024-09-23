@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from koil.decorators import koilable
 from typing import Optional, TypeVar, Any
 from koil.koil import KoilMixin
@@ -7,13 +7,14 @@ T = TypeVar("T")
 
 
 class PedanticKoil(BaseModel, KoilMixin):
+    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
     creating_instance: Optional[Any] = Field(default=None, exclude=True)
     running: bool = False
     name: str = "KoilLoop"
     uvify: bool = True
     grace_period: Optional[float] = None
-    grant_sync = True
-    sync_in_async = False
+    grant_sync: bool = True
+    sync_in_async: bool = False
 
     _token = None
     _loop = None
@@ -21,14 +22,12 @@ class PedanticKoil(BaseModel, KoilMixin):
     def _repr_html_inline_(self):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
 
-    class Config:
-        arbitrary_types_allowed = True
-        underscore_attrs_are_private = True
 
 
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)
 class KoiledModel(BaseModel):
     koil: PedanticKoil = Field(default_factory=PedanticKoil, exclude=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     def __enter__(self: T) -> T: ...
 
@@ -48,10 +47,6 @@ class KoiledModel(BaseModel):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
-        copy_on_model_validation = "none"
 
 
 class Composition(KoiledModel):
