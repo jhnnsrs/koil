@@ -29,26 +29,26 @@ Reference = str
 class UnconnectedSignalError(Exception):
     pass
 
+
 T = TypeVar("T")
 
-class QtFuture(QtCore.QObject,Generic[T]):
-    """ A future that can be resolved in the Qt event loop
-    
+
+class QtFuture(QtCore.QObject, Generic[T]):
+    """A future that can be resolved in the Qt event loop
+
     Qt Futures are futures that can be resolved in the Qt event loop. They are
     useful for functions that need to be resolved in the Qt event loop and are
-    not compatible with the asyncio event loop. 
+    not compatible with the asyncio event loop.
 
     QtFutures are generic and should be passed the type of the return value
     when creating the future. This is useful for type hinting and for the
     future to know what type of value to expect when it is resolved.
 
-    
-    
+
+
     """
+
     cancelled: QtCore.Signal = QtCore.Signal()
-
-
-
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -67,8 +67,6 @@ class QtFuture(QtCore.QObject,Generic[T]):
     @property
     def done(self):
         return self.resolved or self.rejected or self.iscancelled
-    
-
 
     def resolve(self, *args: T):
         if not args:
@@ -86,7 +84,7 @@ class QtFuture(QtCore.QObject,Generic[T]):
         if self.aiofuture.done():
             logger.warning(f"QtFuture {self} already done. Could not reject")
             return
-        
+
         self.rejected = True
 
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
@@ -96,8 +94,8 @@ class KoilStopIteration(Exception):
     pass
 
 
-
 T = TypeVar("T")
+
 
 class QtGenerator(QtCore.QObject, Generic[T]):
     """A generator that can be run in the Qt event loop
@@ -111,6 +109,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
     generator to know what type of value to expect when it is yielded.
 
     """
+
     cancelled: QtCore.Signal = QtCore.Signal()
 
     def __init__(self):
@@ -132,7 +131,6 @@ class QtGenerator(QtCore.QObject, Generic[T]):
 
     def stop(self):
         self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, KoilStopIteration())
-
 
     def __aiter__(self):
         return self
@@ -216,12 +214,7 @@ class QtYielder(QtCore.QObject, Generic[T, P]):
     called = QtCore.Signal(QtGenerator, tuple, dict, object)
     cancelled = QtCore.Signal(QtGenerator)
 
-    def __init__(
-        self,
-        coro: Callable[P, T],
-        use_context=True,
-        **kwargs
-    ):
+    def __init__(self, coro: Callable[P, T], use_context=True, **kwargs):
         super().__init__(**kwargs)
         assert not inspect.isgeneratorfunction(
             coro
@@ -260,7 +253,6 @@ class QtYielder(QtCore.QObject, Generic[T, P]):
             generator._set_cancelled()
             self.cancelled.emit(generator)
             raise
-
 
 
 class QtListener:
@@ -581,10 +573,7 @@ def create_qt_koil(parent, auto_enter: bool = True) -> QtKoil:
     return koil
 
 
-
-
 class KoiledQtMixin(QtCore.QObject):
-
 
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -23,7 +23,6 @@ class PedanticKoil(BaseModel, KoilMixin):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
 
 
-
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)
 class KoiledModel(BaseModel):
     koil: PedanticKoil = Field(default_factory=PedanticKoil, exclude=True)
@@ -46,7 +45,6 @@ class KoiledModel(BaseModel):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
-
 
 
 class Composition(KoiledModel):
