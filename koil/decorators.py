@@ -69,6 +69,9 @@ def koilable(
             if koil is not None:
                 koil.__exit__(None, None, None)
 
+        def koiled_param_exit(self):
+            koiled_exit(self, None, None, None)
+
         async def aexit(self):
             return await self.__aexit__(None, None, None)
 
@@ -80,7 +83,7 @@ def koilable(
         if add_connectors:
             cls.aexit = aexit
             cls.aenter = aenter
-            cls.exit = koiled_exit
+            cls.exit = koiled_param_exit
             cls.enter = koiled_enter
 
         return cls

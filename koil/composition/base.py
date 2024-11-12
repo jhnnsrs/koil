@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
 from koil.decorators import koilable
 from typing import Optional, TypeVar, Any
 from koil.koil import KoilMixin
@@ -7,7 +7,7 @@ T = TypeVar("T")
 
 
 class PedanticKoil(BaseModel, KoilMixin):
-    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True, extra="forbid", )
     creating_instance: Optional[Any] = Field(default=None, exclude=True)
     running: bool = False
     name: str = "KoilLoop"
@@ -16,11 +16,13 @@ class PedanticKoil(BaseModel, KoilMixin):
     grant_sync: bool = True
     sync_in_async: bool = False
 
-    _token = None
-    _loop = None
+    _token = PrivateAttr(None)
+    _loop = PrivateAttr(None)
 
     def _repr_html_inline_(self):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
+    
+
 
 
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)

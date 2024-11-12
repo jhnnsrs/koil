@@ -1,5 +1,8 @@
 import asyncio
+import concurrent.futures
 import threading
+
+import concurrent
 from .process import KoiledProcess
 import janus
 from koil.errors import (
@@ -137,6 +140,9 @@ def unkoil(
             co_future = asyncio.run_coroutine_threadsafe(passed_with_context(), loop)
             while not co_future.done():
                 time.sleep(0.01)
+                # This should go by using an asyncio.Event rather than a time.sleep
+                # i.e we would await the cancel event and the future at the same time
+                # in the other thread
                 if cancel_event and cancel_event.is_set():
                     raise ThreadCancelledError("Task was cancelled")
 
@@ -146,6 +152,131 @@ def unkoil(
                 ctx.set(value)
 
             return x
+
+        except KeyboardInterrupt:
+            logging.info("Grace period triggered?")
+            raise
+
+    raise NotImplementedError(
+        f"You need to be in a Koil() context to use sync() {coro} {loop}"
+    )
+
+
+
+class KoilThreadSafeEvent(asyncio.Event):
+    def __init__(self, loop, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self._loop is None:
+            self._loop = loop
+
+    def set(self):
+        self._loop.call_soon_threadsafe(super().set)
+
+    def clear(self):
+        self._loop.call_soon_threadsafe(super().clear)
+
+class KoilTask:
+
+    def __init__(self, future: concurrent.futures.Future, cancel_event: KoilThreadSafeEvent) -> None:
+        self.future = future
+        self.cancel_event = cancel_event
+
+
+    def result(self):
+        assert self.future, "Task was never run! Please run task before"
+
+        res, context = self.future.result()
+
+        for ctx, value in context.items():
+            ctx.set(value)
+
+        return res
+    
+    def done(self):
+        return self.future.done()
+    
+    def cancel(self):
+        return self.cancel_event.set()
+    
+
+    
+
+
+def unkoil_task(
+    coro: Union[
+        Callable[P, Coroutine[Any, Any, R]],
+        Callable[P, Awaitable[R]],
+    ],
+    *args: P.args,
+    **kwargs: P.kwargs,
+):
+    if is_in_process():
+        return unkoil_process_func(coro, args, kwargs)
+
+    loop = current_loop.get()
+    try:
+        loop0 = asyncio.events.get_running_loop()
+        if not loop or loop0 == loop:
+            return coro(
+                *args, **kwargs
+            )  # We are running in an event doop so we can just return the coroutine
+
+    except RuntimeError:
+        pass
+
+    loop = current_loop.get()
+    if loop:
+
+        cancel_event = KoilThreadSafeEvent(loop)
+        try:
+            if loop.is_closed():
+                raise RuntimeError("Loop is not running")
+
+            ctxs = contextvars.copy_context()
+
+            async def passed_with_context(cancel_event):
+
+
+                async def await_cancelation(cancel_event: asyncio.Event):
+                    await cancel_event.wait()
+                    print("Cancel event triggered")
+
+                await_cancelation_task = asyncio.create_task(await_cancelation(cancel_event))
+                task = asyncio.create_task(coro(*args, **kwargs))
+
+                done, pending = await asyncio.wait(
+                    {await_cancelation_task, task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if await_cancelation_task in done:
+                    print("Cancel event triggered canceling normal tasK")
+                    task.cancel()
+
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+                    raise ThreadCancelledError("Task was cancelled")
+
+                else:
+
+                    await_cancelation_task.cancel()
+
+                    try:
+                        await await_cancelation_task
+                    except asyncio.CancelledError:
+                        pass
+
+                    x = await task
+                    return x, contextvars.copy_context()
+                    
+
+
+            co_future = asyncio.run_coroutine_threadsafe(passed_with_context(cancel_event), loop)
+            print("Waiting for future")
+            return KoilTask(co_future, cancel_event)
 
         except KeyboardInterrupt:
             logging.info("Grace period triggered?")

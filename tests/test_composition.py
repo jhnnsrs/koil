@@ -43,6 +43,7 @@ class App(Composition):
 def test_composition_api_sync():
 
     app = App()
+    
 
     assert app.tan.x == 3, "tan.x should be 3"
     with app:
