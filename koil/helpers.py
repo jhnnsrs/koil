@@ -144,6 +144,7 @@ def unkoil(
                 # i.e we would await the cancel event and the future at the same time
                 # in the other thread
                 if cancel_event and cancel_event.is_set():
+                    co_future.cancel()
                     raise ThreadCancelledError("Task was cancelled")
 
             x, newcontext = co_future.result()
@@ -283,7 +284,7 @@ def unkoil_task(
             raise
 
     raise NotImplementedError(
-        f"You need to be in a Koil() context to use sync() {coro} {loop}"
+        f"You need to be in a Koil() context to use sync() {loop}. Are you sure you are running in a Koil context_manager or have you entered a Koil context?"
     )
 
 
