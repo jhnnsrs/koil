@@ -146,6 +146,9 @@ def unkoil(
                 if cancel_event and cancel_event.is_set():
                     co_future.cancel()
                     raise ThreadCancelledError("Task was cancelled")
+                
+            if co_future.exception():
+                raise co_future.exception()
 
             x, newcontext = co_future.result()
 
