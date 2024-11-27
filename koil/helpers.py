@@ -146,7 +146,7 @@ def unkoil(
                 if cancel_event and cancel_event.is_set():
                     co_future.cancel()
                     raise ThreadCancelledError("Task was cancelled")
-                
+
             if co_future.exception():
                 raise co_future.exception()
 
@@ -166,7 +166,6 @@ def unkoil(
     )
 
 
-
 class KoilThreadSafeEvent(asyncio.Event):
     def __init__(self, loop, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -179,12 +178,14 @@ class KoilThreadSafeEvent(asyncio.Event):
     def clear(self):
         self._loop.call_soon_threadsafe(super().clear)
 
+
 class KoilTask:
 
-    def __init__(self, future: concurrent.futures.Future, cancel_event: KoilThreadSafeEvent) -> None:
+    def __init__(
+        self, future: concurrent.futures.Future, cancel_event: KoilThreadSafeEvent
+    ) -> None:
         self.future = future
         self.cancel_event = cancel_event
-
 
     def result(self):
         assert self.future, "Task was never run! Please run task before"
@@ -195,15 +196,12 @@ class KoilTask:
             ctx.set(value)
 
         return res
-    
+
     def done(self):
         return self.future.done()
-    
+
     def cancel(self):
         return self.cancel_event.set()
-    
-
-    
 
 
 def unkoil_task(
@@ -240,12 +238,13 @@ def unkoil_task(
 
             async def passed_with_context(cancel_event):
 
-
                 async def await_cancelation(cancel_event: asyncio.Event):
                     await cancel_event.wait()
                     print("Cancel event triggered")
 
-                await_cancelation_task = asyncio.create_task(await_cancelation(cancel_event))
+                await_cancelation_task = asyncio.create_task(
+                    await_cancelation(cancel_event)
+                )
                 task = asyncio.create_task(coro(*args, **kwargs))
 
                 done, pending = await asyncio.wait(
@@ -275,10 +274,10 @@ def unkoil_task(
 
                     x = await task
                     return x, contextvars.copy_context()
-                    
 
-
-            co_future = asyncio.run_coroutine_threadsafe(passed_with_context(cancel_event), loop)
+            co_future = asyncio.run_coroutine_threadsafe(
+                passed_with_context(cancel_event), loop
+            )
             print("Waiting for future")
             return KoilTask(co_future, cancel_event)
 

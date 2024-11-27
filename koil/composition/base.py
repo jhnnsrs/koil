@@ -7,7 +7,10 @@ T = TypeVar("T")
 
 
 class PedanticKoil(BaseModel, KoilMixin):
-    model_config: ConfigDict = ConfigDict(arbitrary_types_allowed=True, extra="forbid", )
+    model_config: ConfigDict = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+    )
     creating_instance: Optional[Any] = Field(default=None, exclude=True)
     running: bool = False
     name: str = "KoilLoop"
@@ -21,8 +24,6 @@ class PedanticKoil(BaseModel, KoilMixin):
 
     def _repr_html_inline_(self):
         return f"<table><tr><td>allow sync in async</td><td>{self.sync_in_async}</td></tr><tr><td>uvified</td><td>{self.uvify}</td></tr></table>"
-    
-
 
 
 @koilable(fieldname="koil", add_connectors=True, koil_class=PedanticKoil)
