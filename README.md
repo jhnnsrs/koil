@@ -113,8 +113,8 @@ with AmazingAsyncAPI as e:
   for i in e.yielding_sleeper():
     print(i)
 
-# Context manager is closed and cleaned up
-```>
+# Context manager will take care of the cleanup
+```
 
 
 ## How does it work?
