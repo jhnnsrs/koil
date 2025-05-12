@@ -1,4 +1,4 @@
-from .vars import current_loop, current_process
+from .vars import current_loop
 import asyncio
 
 
@@ -29,15 +29,3 @@ def running_in_same_loop():
         return False
     except RuntimeError:
         return False
-
-
-def running_in_process():
-    """
-    Check if the current code is running in a process
-    """
-    return current_process.get() is not None
-
-
-def koiled_loop_is_healthy():
-    loop = current_loop.get()
-    return loop.is_closed() is False and loop.is_running() is True

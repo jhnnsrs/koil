@@ -1,28 +1,48 @@
-name: Publish
+name: Release with uv and semantic-release
 
 on:
-  release:
-    types:
-      - created
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  id-token: write
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - uses: actions/checkout@v4
         with:
-          python-version: "3.8"
-      - name: Run image
-        uses: abatilo/actions-poetry@v2.0.0
+          fetch-depth: 0
+
+      - name: Install uv and set Python
+        uses: astral-sh/setup-uv@v6
         with:
-          poetry-version: "1.4"
-      - name: Run Poetry Install
-        run: poetry install
-      - name: Publish
+          version: "latest"
+          python-version: "3.12"
+
+      - uses: pyvista/setup-headless-display-action@v3
+        with:
+          qt: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        run: uv run pytest tests
+
+      - name: Run semantic-release
         env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          poetry config pypi-token.pypi $PYPI_TOKEN
-          poetry publish --build
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run semantic-release version
+
+      - name: Publish to Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run semantic-release publish
+
+      - name: Publish to Pypi
+        run: uv publish

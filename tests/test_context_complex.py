@@ -1,14 +1,16 @@
 import asyncio
+from typing import AsyncGenerator
 
 
-from koil import unkoil, unkoilable, koilable
-from koil.helpers import iterate_spawned, run_spawned, unkoil_gen
+from koil import unkoil, koilable
+from koil.composition.base import KoiledModel
+from koil.helpers import iterate_spawned, run_spawned, unkoil_gen, unkoil_task
 from koil.koil import Koil
 from koil.vars import check_cancelled
 import time
 
 
-@koilable
+@koilable()
 class T(object):
     def __init__(self) -> None:
         pass
@@ -27,36 +29,32 @@ class T(object):
         pass
 
 
-@koilable()
-class X(object):
-    def __init__(self, x):
-        self.x = x
+class X(KoiledModel):
+    x: int
 
-    def sleep_and_call(self, nana) -> str:
+    def sleep_and_call(self, nana: str) -> str:
         time.sleep(0.04)
-        y = self.a(nana, as_task=True).run()
+        y = unkoil_task(self.a, nana)
         check_cancelled()
         time.sleep(0.04)
         return y.result()
 
-    def sleep_and_yield(self, nana):
+    def sleep_and_yield(self, nana: str):
         for i in range(2):
-            a = self.a("v")
+            a = unkoil(self.a, "v")
             check_cancelled()
             yield a
 
-    @unkoilable
-    async def a(self, a):
+    async def a(self, a: str) -> str:
         return a + "iterator"
 
-    @unkoilable
     async def t(self):
-        f = await run_spawned(self.sleep_and_call, "haha", cancel_timeout=3)
+        f = await run_spawned(self.sleep_and_call, "haha")
         return "x" + f
 
-    async def g(self):
-        async for i in iterate_spawned(self.sleep_and_yield, "haha", cancel_timeout=3):
-            yield i + "33"
+    async def g(self) -> AsyncGenerator[str, None]:
+        async for elem in iterate_spawned(self.sleep_and_yield, "haha"):
+            yield elem + "33"
 
     async def __aenter__(self):
         return self
@@ -66,19 +64,18 @@ class X(object):
 
 
 async def test_async():
-    async with Koil():
-        async with X(1) as x:
-            x = asyncio.create_task(x.t())
-            await asyncio.sleep(0.02)
-            x.cancel()
-            try:
-                x = await x
-            except asyncio.CancelledError:
-                pass
+    async with X(x=1) as x:
+        x = asyncio.create_task(x.t())
+        await asyncio.sleep(0.02)
+        x.cancel()
+        try:
+            x = await x
+        except asyncio.CancelledError:
+            pass
 
 
 def test_x_sync():
-    with X(1) as x:
+    with X(x=1) as x:
         sender = unkoil_gen(x.g)
         sender.send(None)
         sender.send(None)

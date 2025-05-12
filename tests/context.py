@@ -1,5 +1,6 @@
 import asyncio
-from koil.decorators import koilable, unkoilable
+from types import TracebackType
+from koil.decorators import koilable
 import contextvars
 
 
@@ -11,7 +12,6 @@ class AsyncContextManager:
     def __init__(self) -> None:
         pass
 
-    @unkoilable
     async def aprint(self):
         await asyncio.sleep(0.01)
         return "sss"
@@ -19,5 +19,10 @@ class AsyncContextManager:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *args, **kwargs):
-        return self
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        pass

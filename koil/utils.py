@@ -4,11 +4,11 @@ import concurrent.futures
 import threading
 from typing import Any, Callable
 from koil.errors import CancelledError
-
+from koil.types import AnyCallable
 import inspect
 
 
-def check_is_asyncgen(func) -> bool:
+def check_is_asyncgen(func: AnyCallable) -> bool:
     """Checks if a function is an async generator"""
     if inspect.isasyncgenfunction(func):
         return True
@@ -16,7 +16,7 @@ def check_is_asyncgen(func) -> bool:
     return False
 
 
-def check_is_asyncfunc(func) -> bool:
+def check_is_asyncfunc(func: AnyCallable) -> bool:
     """Checks if a function is an async function"""
     if inspect.iscoroutinefunction(func):
         return True
@@ -24,7 +24,7 @@ def check_is_asyncfunc(func) -> bool:
     return False
 
 
-def check_is_syncgen(func) -> bool:
+def check_is_syncgen(func: AnyCallable) -> bool:
     """Checks if a function is an async generator"""
     if inspect.isgeneratorfunction(func):
         return True
@@ -32,7 +32,7 @@ def check_is_syncgen(func) -> bool:
     return False
 
 
-def check_is_syncfunc(func) -> bool:
+def check_is_syncfunc(func: AnyCallable) -> bool:
     """Checks if a function is an async function"""
     if inspect.isfunction(func):
         return True
@@ -106,8 +106,9 @@ def run_threaded_with_context(
                 except asyncio.CancelledError:
                     pass  # we are not interested in this and it should always be fine
 
-            if task.exception():
-                raise task.exception()
+            exception = task.exception()
+            if exception:
+                raise exception
 
             return task.result()
 
@@ -173,12 +174,21 @@ def run_threaded_with_context_and_signals(
                 except asyncio.CancelledError:
                     pass  # we are not interested in this and it should always be fine
 
-            if task.exception():
-                errored_signal.emit(task.exception())
-                raise task.exception()
+            exception = task.exception()
+            if exception:
+                errored_signal.emit(exception)
+                raise exception
 
-            returned_signal.emit(*task.result())
-            return task.result()
+            result = task.result()
+            if result:
+                if isinstance(result, tuple):
+                    returned_signal.emit(*result)
+                    return result
+                else:
+                    returned_signal.emit(result)
+                    return result
+            else:
+                return None
 
     return asyncio.run_coroutine_threadsafe(passed_with_context(coro), loop)
 
@@ -209,7 +219,6 @@ def iterate_threaded_with_context_and_signals(
 
     async def passed_with_context(coro):
         async def context_future():
-
             for ctx, value in ctxs.items():
                 ctx.set(value)
 

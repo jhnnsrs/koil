@@ -1,13 +1,37 @@
-from koil.helpers import unkoil, unkoil_gen
-from koil.koil import Koil
+from types import TracebackType
+from koil.helpers import unkoil
+from koil.koil import global_koil, Koil, KoilProtocol
 import inspect
-from typing import Callable, Type, TypeVar
-from koil.vars import current_loop
-from koil.errors import KoilError
-import logging
-from .utils import check_is_asyncfunc, check_is_asyncgen
+from typing import Callable, Self, Type, TypeVar
 
-T = TypeVar("T")
+import logging
+from typing import Callable, Type, Protocol
+
+
+class Koilable(Protocol):
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class SyncKoilable(Protocol):
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+T = TypeVar("T", bound=Koilable)
+KoilType = TypeVar("KoilType", bound=KoilProtocol)
 
 
 logger = logging.getLogger(__name__)
@@ -15,10 +39,8 @@ logger = logging.getLogger(__name__)
 
 def koilable(
     fieldname: str = "__koil",
+    loop_field_name: str = "__loop",
     add_connectors: bool = False,
-    init_koil: bool = True,
-    koil_class: Type[Koil] = Koil,
-    **koilparams,
 ) -> Callable[[Type[T]], Type[T]]:
     """
     Decorator to make an async generator koilable.
@@ -32,89 +54,56 @@ def koilable(
     """
 
     def real_cls_decorator(cls: Type[T]) -> Type[T]:
-        cls.__koilable__ = True
         assert hasattr(cls, "__aenter__"), "Class must implement __aenter__"
         assert hasattr(cls, "__aenter__"), "Class must implement __aexit__"
-        assert inspect.iscoroutinefunction(
-            cls.__aenter__
-        ), "__aenter__ must be a coroutine"
-        assert inspect.iscoroutinefunction(
-            cls.__aexit__
-        ), "__aexit__ must be a coroutine (awaitable)"
+        assert inspect.iscoroutinefunction(cls.__aenter__), (
+            "__aenter__ must be a coroutine"
+        )
+        assert inspect.iscoroutinefunction(cls.__aexit__), (
+            "__aexit__ must be a coroutine (awaitable)"
+        )
+        setattr(cls, "__koilable__", True)
 
-        def koiled_enter(self, *args, **kwargs):
-            potential_koiled_loop = current_loop.get()
+        def koiled_enter(self: Koilable):
+            potential_koiled_loop = global_koil.get()
             if potential_koiled_loop is not None:
                 # We are in a koiled loop no need to koil again
-                return unkoil(self.__aenter__, *args, **kwargs)
+                return unkoil(self.__aenter__)
             else:
                 if not hasattr(self, fieldname) or getattr(self, fieldname) is None:
-                    if init_koil:
-                        setattr(
-                            self,
-                            fieldname,
-                            koil_class(name=f"{repr(self)}", **koilparams),
-                        )
-                    else:
-                        raise KoilError(
-                            f"Does not have a koil instance on {fieldname} and init_koil is False"
-                        )
+                    setattr(self, fieldname, Koil())
 
                 getattr(self, fieldname).__enter__()
-                return unkoil(self.__aenter__, *args, **kwargs)
+                return unkoil(self.__aenter__)
 
-        def koiled_exit(self, *args, **kwargs):
-            unkoil(self.__aexit__, *args, **kwargs)
+        def koiled_exit(
+            self: Koilable,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ):
+            unkoil(self.__aexit__, exc_type, exc_val, exc_tb)
             koil = getattr(self, fieldname, None)
             if koil is not None:
                 koil.__exit__(None, None, None)
 
-        def koiled_param_exit(self):
+        def koiled_param_exit(self: Koilable):
             koiled_exit(self, None, None, None)
 
-        async def aexit(self):
+        async def aexit(self: Koilable):
             return await self.__aexit__(None, None, None)
 
-        async def aenter(self):
+        async def aenter(self: Koilable):
             return await self.__aenter__()
 
-        cls.__enter__ = koiled_enter
-        cls.__exit__ = koiled_exit
+        setattr(cls, "__enter__", koiled_enter)
+        setattr(cls, "__exit__", koiled_exit)
         if add_connectors:
-            cls.aexit = aexit
-            cls.aenter = aenter
-            cls.exit = koiled_param_exit
-            cls.enter = koiled_enter
+            setattr(cls, "aexit", aexit)
+            setattr(cls, "aenter", aenter)
+            setattr(cls, "exit", koiled_param_exit)
+            setattr(cls, "enter", koiled_enter)
 
         return cls
 
     return real_cls_decorator
-
-
-def unkoilable(func):
-    """Decorator to make a function unkoilable
-
-    Args:
-        func (Callable): The function to run in the koil loop
-
-    Raises:
-        TypeError: If the function is not a coroutine
-
-    """
-
-    if not check_is_asyncgen(func) and not check_is_asyncfunc(func):
-        raise TypeError("Function must be a coroutine")
-
-    if check_is_asyncgen(func):
-
-        def wrapper(*args, **kwargs):
-            return unkoil_gen(func, *args, **kwargs)
-
-        return wrapper
-
-    else:
-
-        def wrapper(*args, **kwargs):
-            return unkoil(func, *args, **kwargs)
-
-        return wrapper

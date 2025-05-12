@@ -8,7 +8,7 @@ from typing import Any, Callable, Generic, TypeVar, Awaitable
 
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
-from koil.koil import Koil, KoilMixin
+from koil.koil import Koil
 from koil.task import KoilFuture, KoilGeneratorRunner, KoilRunner, KoilYieldFuture
 from koil.utils import (
     iterate_threaded_with_context_and_signals,
@@ -165,9 +165,9 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
         **kwargs: P.kwargs,
     ):
         super().__init__(*args, **kwargs)
-        assert not inspect.iscoroutinefunction(
-            coro
-        ), f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+        assert not inspect.iscoroutinefunction(coro), (
+            f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+        )
         self.coro = coro
         self.called.connect(self.on_called)
         self.autoresolve = autoresolve
@@ -216,9 +216,9 @@ class QtYielder(QtCore.QObject, Generic[T, P]):
 
     def __init__(self, coro: Callable[P, T], use_context=True, **kwargs):
         super().__init__(**kwargs)
-        assert not inspect.isgeneratorfunction(
-            coro
-        ), f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+        assert not inspect.isgeneratorfunction(coro), (
+            f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+        )
         self.coro = coro
         self.called.connect(self.on_called)
         self.use_context = use_context
@@ -237,7 +237,6 @@ class QtYielder(QtCore.QObject, Generic[T, P]):
         self.called.emit(generator, args, kwargs, ctx)
         try:
             while True:
-
                 if timeout:
                     x = await asyncio.wait_for(anext(generator), timeout=timeout)
                 else:
@@ -316,9 +315,11 @@ class QtRunner(KoilRunner, QtCore.QObject):
     returned: QtCore.Signal = QtCore.Signal(object)
     _returnedwithoutcontext = QtCore.Signal(object, object)
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, unique=False, **kwargs):
         super().__init__(*args, **kwargs)
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
+        self.unique = unique
+        self.last_future = None
 
     def on_returnedwithoutcontext(self, res, ctxs):
         for ctx, value in ctxs.items():
@@ -326,6 +327,9 @@ class QtRunner(KoilRunner, QtCore.QObject):
         self.returned.emit(res)
 
     def run(self, *args: P.args, **kwargs: P.kwargs):
+        if self.unique and self.last_future:
+            self.last_future.cancel()
+
         args = self.args + args
         kwargs = {**self.kwargs, **kwargs}
 
@@ -345,7 +349,10 @@ class QtRunner(KoilRunner, QtCore.QObject):
             *args,
             **kwargs,
         )
-        return KoilFuture(future, cancel_event)
+
+        last_future = KoilFuture(future, cancel_event)
+
+        return last_future
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         return self.run(*args, **kwds)
@@ -405,26 +412,23 @@ class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
         return KoilYieldFuture(future, cancel_event)
 
 
-class QtKoilMixin(KoilMixin):
-    def __enter__(self):
-        super().__enter__()
-        assert self.parent, "Parent must be set before entering the loop"
-        self._qobject = WrappedObject(parent=self.parent, koil=self)
-        assert (
-            self._qobject.parent() is not None
-        ), "No parent found. Please provide a parent"
-        ap_instance = QtWidgets.QApplication.instance()
-        if ap_instance is None:
-            raise NotImplementedError("Qt Application not found")
-        return self
-
-
 def async_generator_to_qt(func):
     return QtGeneratorRunner(func)
 
 
-def async_to_qt(func):
-    return QtRunner(func)
+def async_to_qt(func, unique=False):
+    """ " Converts an async function to a QtRunner
+
+    Args:
+        func: The async function to convert
+        unique: If True, only one instance of the function can be running at a time
+
+    Returns:
+        QtRunner: The QtRunner instance
+
+    """
+
+    return QtRunner(func, unique=unique)
 
 
 def qt_to_async(func, autoresolve=False, use_context=True):
@@ -553,33 +557,30 @@ class WrappedObject(QtCore.QObject):
                 self.koil.__exit__(None, None, None)
 
 
-@dataclass
-class QtKoil(QtKoilMixin):
-    auto_enter = True
-    disconnect_on_close: bool = True
-    parent: QtWidgets.QWidget = None
+class QtKoil(Koil):
+    def __init__(self, parent: QtCore.QObject):
+        super().__init__()
+        self.parent = parent
+        self._qobject = None
 
-    def __post_init__(self):
-        self.name = self.parent.__class__.__name__
+    def __enter__(self):
+        super().__enter__()
+        assert self.parent, "Parent must be set before entering the loop"
+        self._qobject = WrappedObject(parent=self.parent, koil=self)
+        assert self._qobject.parent() is not None, (
+            "No parent found. Please provide a parent"
+        )
+        ap_instance = QtWidgets.QApplication.instance()
+        if ap_instance is None:
+            raise NotImplementedError("Qt Application not found")
+        return self
 
     class Config:
         arbitrary_types_allowed = True
 
 
-def create_qt_koil(parent, auto_enter: bool = True) -> QtKoil:
+def create_qt_koil(parent: QtCore.QObject, auto_enter: bool = True) -> QtKoil:
     koil = QtKoil(parent=parent)
     if auto_enter:
         koil.enter()
     return koil
-
-
-class KoiledQtMixin(QtCore.QObject):
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.koil = QtKoil(parent=self)
-        self.koil.enter()
-
-    def __del__(self):
-        self.koil.__exit__(None, None, None)
-        self.koil = None

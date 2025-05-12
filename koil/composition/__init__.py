@@ -1,4 +1,4 @@
-from .base import Composition, PedanticKoil, KoiledModel
+from .base import Composition, KoiledModel
 
 
-__all__ = ["Composition", "PedanticKoil", "KoiledModel"]
+__all__ = ["Composition", "KoiledModel"]

@@ -1,14 +1,35 @@
 import asyncio
 from contextlib import contextmanager
+import contextvars
 from dataclasses import dataclass
 import os
 import sys
 import threading
+from types import TracebackType
+from typing import Optional, Protocol, Self
 
 from koil.errors import ContextError
-from koil.vars import current_loop
 import time
 import logging
+
+
+class KoiledLoop(Protocol):
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop: ...
+
+    @property
+    def cancel_timeout(self) -> float: ...
+
+    @property
+    def sync_in_async(self) -> bool: ...
+
+
+global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextVar(
+    "GLOBAL_KOIL", default=None
+)
+global_koil_loop: contextvars.ContextVar[Optional[asyncio.AbstractEventLoop]] = (
+    contextvars.ContextVar("GLOBAL_KOIL_LOOP", default=None)
+)
 
 
 logger = logging.getLogger(__name__)
@@ -19,14 +40,25 @@ except ImportError:
     uvloop = None
 
 
+class KoilProtocol(Protocol):
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: type[BaseException] | None,
+    ) -> None: ...
+
+
 @contextmanager
-def _selector_policy(uvify=True):
+def _selector_policy(uvify: bool = True):
     original_policy = asyncio.get_event_loop_policy()
 
     try:
         if uvify:
             if uvloop:
-                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())  # type: ignore
             else:
                 logger.info("uvloop not installed, using default policy")
         elif (
@@ -40,7 +72,7 @@ def _selector_policy(uvify=True):
         asyncio.set_event_loop_policy(original_policy)
 
 
-def run_threaded_event_loop(loop):
+def run_threaded_event_loop(loop: asyncio.BaseEventLoop):
     try:
         loop.run_forever()
     finally:
@@ -74,7 +106,7 @@ def run_threaded_event_loop(loop):
             loop.close()
 
 
-def get_threaded_loop(name="KoilLoop", uvify=True):
+def get_threaded_loop(name: str = "KoilLoop", uvify: bool = True):
     """Creates a new event loop and run it in a new threads"""
     with _selector_policy(uvify=uvify):
         newloop = asyncio.new_event_loop()
@@ -83,12 +115,20 @@ def get_threaded_loop(name="KoilLoop", uvify=True):
     th.daemon = True
     th.start()
 
-    newloop.name = name
-
     return newloop
 
 
-class KoilMixin:
+class Koil:
+    def __init__(
+        self,
+        sync_in_async: bool = True,
+        uvify: bool = True,
+    ):
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self.running = False
+        self.sync_in_async = sync_in_async
+        self.cancel_timeout = 2.0
+
     def exit(self):
         return self.__exit__(None, None, None)
 
@@ -98,32 +138,42 @@ class KoilMixin:
     def enter(self):
         return self.__enter__()
 
-    async def aexit(self):
-        return await self.__aexit__(None, None, None)
+    @property
+    def loop(self):
+        if self._loop is None:
+            raise RuntimeError("Loop is not running. This should not happen")
+        return self._loop
 
     async def __aenter__(self):
+        try:
+            self._loop = asyncio.get_running_loop()
+            global_koil_loop.set(self._loop)
+            print("Setting up koil loop. Locally")
+        except RuntimeError:
+            pass
         return self
 
     async def __aexit__(self, *args, **kwargs):
-        pass
+        global_koil.set(None)  # type: ignore[assignment]
+        return None
 
     def __enter__(self):
         try:
             asyncio.get_running_loop()
-            if not hasattr(self, "sync_in_async") or self.sync_in_async is False:
+            if not self.sync_in_async:
                 raise ContextError(
                     f"""You are running in asyncio event loop already. 
                     Using koil makes no sense here, use asyncio instead. You can use koil in a sync context by setting `sync_in_async=True` currently it is
-                    set to {getattr(self, "sync_in_async", None)}.
+                    set to {self.sync_in_async}.
                     If this happens in a context manager, you probably forgot to use the `async with` syntax."""
                 )
         except RuntimeError:
             pass
 
-        self._loop = None
-        _loop = current_loop.get()
-        if _loop is None:
-            # We are now creating a koiled loop for this context
+        koil = global_koil.get()  # type: ignore[assignment]
+
+        if koil is None:
+            # We are not in a koiled loop, so we need to create one
             self._loop = get_threaded_loop(
                 getattr(
                     self,
@@ -132,17 +182,25 @@ class KoilMixin:
                 ),
                 uvify=getattr(self, "uvify", True),
             )
-            current_loop.set(self._loop)
+            global_koil.set(self)
+            global_koil_loop.set(self._loop)
+            print("Setting up koil loop. GLobally")
         self.running = True
         return self
 
-    def __exit__(self, *args, **kwargs):
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ):
+        if self.loop:
+            # If we started the loop, we need to stop it
+            self.loop.call_soon_threadsafe(self.loop.stop)
 
             iterations = 0
 
-            while self._loop.is_running():
+            while self.loop.is_running():
                 time.sleep(0.001)
                 iterations += 1
                 if iterations == 100:
@@ -150,18 +208,7 @@ class KoilMixin:
                         "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
                     )
 
-            current_loop.set(None)
+            global_koil.set(None)
+            global_koil_loop.set(None)
+
         self.running = False
-
-
-@dataclass
-class Koil(KoilMixin):
-    "The instance that created this class through entering"
-
-    uvify: bool = False
-    """Shoul we run the loop with uvloop?"""
-
-    name: str = "KoilLoop"
-    """How would you like to name this loop"""
-
-    force_lonely: bool = False

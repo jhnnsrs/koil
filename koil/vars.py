@@ -1,13 +1,19 @@
 import contextvars
 import multiprocessing
+import threading
 from koil.errors import ThreadCancelledError
-
+from typing import Optional
 
 current_loop = contextvars.ContextVar("current_loop", default=None)
 
 
+current_koil = contextvars.ContextVar("current_koil", default=None)
+
+
 # Will only be set in the worker tread
-current_cancel_event = contextvars.ContextVar("current_cancel_event", default=None)
+current_cancel_event: contextvars.ContextVar[Optional[threading.Event]] = (
+    contextvars.ContextVar("current_cancel_event", default=None)
+)
 
 
 # Will only be set in the worker process

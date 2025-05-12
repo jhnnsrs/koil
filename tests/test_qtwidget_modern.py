@@ -1,6 +1,6 @@
 import asyncio
 from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtFuture, QtGenerator, QtKoil, QtKoilMixin, KoiledQtMixin
+from koil.qt import QtFuture, QtGenerator, QtKoil
 import contextvars
 import pytest
 from koil.qt import unkoilqt, koilqt, async_generator_to_qt, async_to_qt
@@ -29,6 +29,10 @@ async def sleep_and_yield(times=5):
         yield i
 
 
+class QtKoilMixin:
+    pass
+
+
 class KoiledWidget(QtWidgets.QWidget, QtKoilMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -45,6 +49,10 @@ class KoiledWidget(QtWidgets.QWidget, QtKoilMixin):
 
     def greet(self):
         self.greet_label.setText("Hello!")
+
+
+class KoiledQtMixin(QtKoilMixin):
+    pass
 
 
 class KoiledInterferingWidget(QtWidgets.QWidget, KoiledQtMixin):
@@ -219,7 +227,6 @@ def test_call_gen(qtbot):
 
     # click in the Greet button and make sure it updates the appropriate label
     with qtbot.waitSignal(widget.sleep_and_yield_task.yielded, timeout=1000):
-
         qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton)
 
 
@@ -231,7 +238,6 @@ def test_call_future(qtbot):
 
     # click in the Greet button and make sure it updates the appropriate label
     with qtbot.waitSignal(widget.my_coro_task.returned, timeout=1000):
-
         qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton)
 
     assert widget.task_was_run is True
