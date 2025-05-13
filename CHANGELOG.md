@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v2.0.4 (2025-05-13)
+
+### Bug Fixes
+
+- Fix resolving
+  ([`ee0b398`](https://github.com/jhnnsrs/koil/commit/ee0b3989ab72dbc8ee29b78e7beb762f60fc9a2d))
+
+
 ## v2.0.3 (2025-05-13)
 
 
