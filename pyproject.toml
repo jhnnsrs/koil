@@ -26,6 +26,7 @@ dev-dependencies = [
     "pyqt5>=5.15.11",
     "pyqt5-qt5>=5.15.16",
     "pyqt5-stubs>=5.15.6.0",
+    "python-semantic-release>=9.21.1",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -54,3 +55,11 @@ docs_base_path = "website/docs"
 [tool.mypy]
 ignore_missing_imports = true
 strict = true
+
+
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+upload_to_pypi = true
+branch = "main"
+build_command = "uv build"
