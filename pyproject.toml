@@ -13,7 +13,6 @@ dependencies = [
 
 [project.optional-dependencies]
 qtpy = ["qtpy>1"]
-uvloop = ["uvloop>=0.16.0,<0.17"]
 
 [tool.uv]
 dev-dependencies = [

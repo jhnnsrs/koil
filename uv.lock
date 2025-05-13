@@ -157,9 +157,6 @@ dependencies = [
 qtpy = [
     { name = "qtpy" },
 ]
-uvloop = [
-    { name = "uvloop" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -180,7 +177,6 @@ requires-dist = [
     { name = "janus", specifier = ">=1.0.0,<2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "qtpy", marker = "extra == 'qtpy'", specifier = ">1" },
-    { name = "uvloop", marker = "extra == 'uvloop'", specifier = ">=0.16.0,<0.17" },
 ]
 
 [package.metadata.requires-dev]
@@ -503,9 +499,3 @@ sdist = { url = "https://files.pythonhosted.org/packages/82/5c/e6082df02e215b846
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/08/aa4fdfb71f7de5176385bd9e90852eaf6b5d622735020ad600f2bab54385/typing_inspection-0.4.0-py3-none-any.whl", hash = "sha256:50e72559fcd2a6367a19f7a7e610e6afcb9fac940c650290eed893d61386832f", size = 14125 },
 ]
-
-[[package]]
-name = "uvloop"
-version = "0.16.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ab/d9/22bbffa8f8d7e075ccdb29e8134107adfb4710feb10039f9d357db8b589c/uvloop-0.16.0.tar.gz", hash = "sha256:f74bc20c7b67d1c27c72601c78cf95be99d5c2cdd4514502b4f3eb0933ff1228", size = 2129067 }
