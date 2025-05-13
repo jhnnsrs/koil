@@ -33,11 +33,11 @@ class AmazingAsyncAPI:
     def __init__(self) -> None:
         pass
 
-    async def sleep(self):
+    async def asleep(self):
         await asyncio.sleep(0.01)
         return "the-glory-of-async"
 
-    async def yielding_sleeper(self):
+    async def ayielding_sleeper(self):
         for i in range(0, 20):
             await asyncio.sleep(0.01)
             yield i
@@ -76,23 +76,29 @@ a sync context with unkoilable.
 
 
 ```python
-from koil import koilable, unkoilable
+from koil import koilable, unkoil, unkoil_gen
 
 @koilable
 class AmazingAsyncAPI:
     def __init__(self) -> None:
         pass
 
-    @unkoilable
-    async def sleep(self):
+    async def asleep(self):
         await asyncio.sleep(0.01)
         return "the-glory-of-async"
 
-    @unkoilable
-    async def yielding_sleeper(self):
-        for i in range(0, 20):
+    async def ayielding_sleeper(self, limit=20):
+        for i in range(0, limit):
             await asyncio.sleep(0.01)
             yield i
+
+    
+    def sleep(self):
+        return unkoilable(self.asleep)
+
+    def yielding_sleeper(self):
+        return unkoil_gen(self.ayielding_sleeper, limit=20),
+
 
     async def __aenter__(self):
         # amazing connection logic
