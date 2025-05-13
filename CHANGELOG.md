@@ -1,7 +1,15 @@
 # CHANGELOG
 
 
+## v2.0.3 (2025-05-13)
+
+
 ## v2.0.2 (2025-05-13)
+
+### Bug Fixes
+
+- Fix loop check
+  ([`c103bcd`](https://github.com/jhnnsrs/koil/commit/c103bcde87fd6ad044ee712506af9a390e1d66a9))
 
 
 ## v2.0.1 (2025-05-13)
