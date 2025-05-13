@@ -178,13 +178,13 @@ class Koil:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ):
-        if self.loop:
+        if self._loop:
             # If we started the loop, we need to stop it
-            self.loop.call_soon_threadsafe(self.loop.stop)
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
             iterations = 0
 
-            while self.loop.is_running():
+            while self._loop.is_running():
                 time.sleep(0.001)
                 iterations += 1
                 if iterations == 100:

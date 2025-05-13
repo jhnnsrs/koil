@@ -2,7 +2,7 @@ from koil.composition import Composition
 import asyncio
 from pydantic import Field
 from koil.composition.base import KoiledModel
-
+from koil.koil import Koil
 from koil.helpers import unkoil
 
 
@@ -64,3 +64,24 @@ async def test_composition_api_async():
         )
 
     assert not app.kant.connected, "kant should be disconnected"
+
+
+
+def test_multiple_contexts():
+    
+    app = App()
+
+    with Koil():
+        
+        
+        assert app.tan.x == 3, "tan.x should be 3"
+       
+        with app as app:
+            assert app.kant.connected, "kant should be connected"
+            assert app.tan.run() == 4, "tan.x should be 4 because it was set in enter"
+    
+        with app as app:
+            assert app.tan.x == 4, "tan.x should be 3"
+            assert app.kant.connected, "kant should be connected"
+            assert app.tan.run() == 4, "tan.x should be 4 because it was set in enter"
+    
