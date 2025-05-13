@@ -1,4 +1,5 @@
 import asyncio
+from typing import Tuple
 from PyQt5 import QtWidgets, QtCore
 from koil.qt import QtFuture, QtGenerator, create_qt_koil
 import contextvars
@@ -143,12 +144,13 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
     def call_task(self):
         self.my_coro_task.run()
 
-    def task_finished(self, _: None):
-        self.greet_label.setText("Hello!")
+    def task_finished(self, both: Tuple[str, str]):
+        str = both[0] + " " + both[1]
+        self.greet_label.setText(str)
 
-    async def call_coro(self):
-        await self.do_me.acall()
+    async def call_coro(self) -> Tuple[str, str]:
         self.coroutine_was_run = True
+        return await self.do_me.acall(), "called"
 
 
 class KoiledGeneratorWidget(QtWidgets.QWidget):

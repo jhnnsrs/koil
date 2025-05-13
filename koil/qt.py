@@ -100,7 +100,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
     def is_cancelled(self):
         return self.aiofuture.cancelled()
 
-    def resolve(self, *args: T):
+    def resolve(self, returns: T):
         ctx = contextvars.copy_context()
         self.resolved = True
 
@@ -108,7 +108,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
             logger.warning(f"QtFuture {self} already done. Cannot resolve")
             return
 
-        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, args)) # type: ignore
+        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, returns))
 
     def reject(self, exp: Exception):
         if self.aiofuture.done():
