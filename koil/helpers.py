@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import AsyncGenerator
 import concurrent.futures
 import threading
 
@@ -10,17 +9,17 @@ from koil.errors import (
     KoilStopIteration,
     ThreadCancelledError,
 )
-from typing import AsyncGenerator
-from koil.utils import run_threaded_with_context
+from typing import AsyncGenerator, cast
 from koil.vars import (
-    current_loop,
     current_cancel_event,
+    global_koil,
+    global_koil_loop,
 )
-from koil.koil import global_koil, global_koil_loop
 import contextvars
-import time
 import logging
 from typing import Callable, Dict, Generic, Tuple, TypeVar
+from koil.utils import run_async_sharing_context, KoilFuture
+
 
 try:
     from typing import ParamSpec
@@ -34,10 +33,12 @@ P = ParamSpec("P")
 T = TypeVar("T")
 R = TypeVar("R")
 
+SendType = TypeVar("SendType")
 
-def unkoil_gen(
-    iterator: Callable[P, AsyncGenerator[R, None]], *args: P.args, **kwargs: P.kwargs
-) -> Generator[R, None, None]:
+
+
+
+def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
     koil_loop = global_koil_loop.get()
 
     if not koil_loop:
@@ -68,39 +69,34 @@ def unkoil_gen(
 
     if koil_loop.is_closed():
         raise RuntimeError("Loop is not running")
+    
+    return koil_loop
 
-    cancel_event = current_cancel_event.get() or threading.Event()
+
+
+def unkoil_gen(
+    iterator: Callable[P, AsyncGenerator[R, SendType]],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> Generator[R, SendType, None]:
+    koil_loop = get_koiled_loop_or_raise()
+
 
     ait = iterator(*args, **kwargs).__aiter__()
-    res = [False, False]
-    next_args = None
 
-    async def next_on_ait(inside_args: Tuple[Any] | None = None) -> Tuple[bool, Any]:
-        try:
-            try:
-                if inside_args:
-                    obj = await ait.__anext__(*inside_args)
-                else:
-                    obj = await ait.__anext__()
-                return [False, obj]
-            except StopAsyncIteration:
-                return [True, None]
-        except asyncio.CancelledError as e:
-            return [False, e]
 
+    future = run_async_sharing_context(ait.__anext__, koil_loop, None)
+    send_val = yield future.result()
     while True:
-        res = run_threaded_with_context(next_on_ait, koil_loop, cancel_event, next_args)
-        x, context = res.result()
-        done, obj = x
-        if done:
-            if obj:
-                raise obj
+        if send_val is None:
+            future = run_async_sharing_context(ait.__anext__, koil_loop, None)
+        else:
+            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)
+
+        try:
+            send_val = yield future.result()
+        except StopAsyncIteration:
             break
-
-        for ctx, value in context.items():
-            ctx.set(value)
-
-        next_args = yield obj
 
 
 def unkoil(
@@ -111,71 +107,12 @@ def unkoil(
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
-    koil_loop = global_koil_loop.get()
+    koil_loop = get_koiled_loop_or_raise()
 
-    if not koil_loop:
-        raise RuntimeError("No koil context found")
-
-    try:
-        loop0 = asyncio.events.get_running_loop()
-        if koil_loop == loop0:
-            raise NotImplementedError(
-                "Calling unkoil() from within a running loop. This is not supported"
-            )
-        else:
-            koil = global_koil.get()
-            if koil:
-                if not koil.sync_in_async:
-                    raise NotImplementedError(
-                        "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
-                    )
-            else:
-                # We are neither in a top level koil loop (i.e. we have always been async)
-                raise NotImplementedError(
-                    "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
-                )
-            # TODO: Check if async in sync is set to true
-            pass
-    except RuntimeError:
-        pass
-
-    if koil_loop.is_closed():
-        raise RuntimeError("Loop is not running")
-
-    cancel_event = current_cancel_event.get()
-
-    try:
-        ctxs = contextvars.copy_context()
-
-        async def passed_with_context():
-            for ctx, value in ctxs.items():
-                ctx.set(value)
-
-            x = await coro(*args, **kwargs)
-            newcontext = contextvars.copy_context()
-            return x, newcontext
-
-        co_future = asyncio.run_coroutine_threadsafe(passed_with_context(), koil_loop)
-        while not co_future.done():
-            time.sleep(0.01)
-            # This should go by using an asyncio.Event rather than a time.sleep
-            # i.e we would await the cancel event and the future at the same time
-            # in the other thread
-            if cancel_event and cancel_event.is_set():
-                co_future.cancel()
-                raise ThreadCancelledError("Task was cancelled")
-
-        x, newcontext = co_future.result()
-
-        for ctx, value in newcontext.items():
-            ctx.set(value)
-
-        return x
-
-    except KeyboardInterrupt:
-        logging.info("Grace period triggered?")
-        raise
-
+    context_aware_future = run_async_sharing_context(
+        coro, koil_loop, None, *args, **kwargs)
+    
+    return context_aware_future.result()
 
 class KoilThreadSafeEvent(asyncio.Event):
     def __init__(self, koil_loop: asyncio.AbstractEventLoop):
@@ -194,60 +131,6 @@ TaskArgs = TypeVar("TaskArgs")
 TaskNext = TypeVar("TaskNext")
 
 
-class KoilTask(Generic[TaskReturn]):
-    def __init__(
-        self,
-        future: concurrent.futures.Future[Tuple[TaskReturn, contextvars.Context]],
-        cancel_event: KoilThreadSafeEvent,
-    ) -> None:
-        self.future = future
-        self.cancel_event = cancel_event
-
-    def result(self) -> TaskReturn:
-        assert self.future, "Task was never run! Please run task before"
-
-        res, context = self.future.result()
-
-        for ctx, value in context.items():
-            ctx.set(value)
-
-        return res
-
-    def done(self):
-        return self.future.done()
-
-    def cancel(self):
-        return self.cancel_event.set()
-
-
-class KoilGeneratorTask(Generic[TaskReturn, TaskNext]):
-    def __init__(
-        self,
-        future: concurrent.futures.Future[Tuple[TaskReturn, contextvars.Context]],
-        cancel_event: KoilThreadSafeEvent,
-    ) -> None:
-        self.future = future
-        self.cancel_event = cancel_event
-
-    def next(
-        self,
-    ) -> TaskReturn:
-        assert self.future, "Task was never run! Please run task before"
-
-        res, context = self.future.result()
-
-        for ctx, value in context.items():
-            ctx.set(value)
-
-        return res
-
-    def done(self):
-        return self.future.done()
-
-    def cancel(self):
-        return self.cancel_event.set()
-
-
 def unkoil_task(
     coro: Union[
         Callable[P, Coroutine[Any, Any, R]],
@@ -255,89 +138,17 @@ def unkoil_task(
     ],
     *args: P.args,
     **kwargs: P.kwargs,
-) -> KoilTask[R]:
-    koil_loop = global_koil_loop.get()
+) -> KoilFuture[R]:
+    koil_loop = get_koiled_loop_or_raise()
 
-    if not koil_loop:
-        raise RuntimeError("No koil context found")
+    return run_async_sharing_context(
+        coro,
+        koil_loop,
+        None,
+        *args,
+        **kwargs,
+    )
 
-    try:
-        loop0 = asyncio.events.get_running_loop()
-        if koil_loop == loop0:
-            raise NotImplementedError(
-                "Calling unkoil() from within a running loop. This is not supported"
-            )
-        else:
-            koil = global_koil.get()
-            if koil:
-                if not koil.sync_in_async:
-                    raise NotImplementedError(
-                        "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
-                    )
-            else:
-                # We are neither in a top level koil loop (i.e. we have always been async)
-                raise NotImplementedError(
-                    "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
-                )
-            # TODO: Check if async in sync is set to true
-            pass
-    except RuntimeError:
-        pass
-
-    if koil_loop.is_closed():
-        raise RuntimeError("Loop is not running")
-
-    try:
-        ctxs = contextvars.copy_context()
-
-        cancel_event = KoilThreadSafeEvent(koil_loop)
-
-        async def passed_with_context(cancel_event):
-            async def await_cancelation(cancel_event: asyncio.Event):
-                await cancel_event.wait()
-                print("Cancel event triggered")
-
-            await_cancelation_task = asyncio.create_task(
-                await_cancelation(cancel_event)
-            )
-            task = asyncio.create_task(coro(*args, **kwargs))
-
-            done, pending = await asyncio.wait(
-                {await_cancelation_task, task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if await_cancelation_task in done:
-                print("Cancel event triggered canceling normal tasK")
-                task.cancel()
-
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-                raise ThreadCancelledError("Task was cancelled")
-
-            else:
-                await_cancelation_task.cancel()
-
-                try:
-                    await await_cancelation_task
-                except asyncio.CancelledError:
-                    pass
-
-                x = await task
-                return x, contextvars.copy_context()
-
-        co_future = asyncio.run_coroutine_threadsafe(
-            passed_with_context(cancel_event), koil_loop
-        )
-        print("Waiting for future")
-        return KoilTask(co_future, cancel_event)
-
-    except KeyboardInterrupt:
-        logging.info("Grace period triggered?")
-        raise
 
 
 async def run_spawned(
@@ -356,6 +167,7 @@ async def run_spawned(
         assert koil_loop == loop, (
             "You are trying to run a koil generator in a different loop than the one it was created in"
         )
+        
 
     def wrapper(
         cancel_event: threading.Event,
@@ -363,15 +175,15 @@ async def run_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> R:
+
+        for ctx, value in context.items():
+            ctx.set(value)
+            
+        
+        # This needs to happend after the context is set
         global_koil.set(koil)
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
-
-        if context:
-            for ctx, value in context.items():
-                ctx.set(value)
-
-        logging.debug("New thread spawned")
 
         return sync_func(*sync_args, **sync_kwargs)
 
@@ -437,21 +249,24 @@ async def iterate_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> None:
+
+        for ctx, value in context.items():
+            ctx.set(value)
+                
+                
+         # This needs to happend after the context is set
+        global_koil.set(koil)
         global_koil_loop.set(loop)
-
         current_cancel_event.set(cancel_event)
+        
 
-        if context:
-            for ctx, value in context.items():
-                ctx.set(value)
-
-        it = sync_gen(*sync_args, **sync_kwargs).__iter__()  # type: ignore
+        generator = cast(Generator[R, S, None], sync_gen(*sync_args, **sync_kwargs))  # type: ignore
+        it = generator.__iter__()
 
         args = ()
         while True:
             try:
-                res = it.__next__(*args if args else ())  # type: ignore
-                print("Yielding result", res)
+                res = it.__next__(*args if args else ())
                 if cancel_event.is_set():
                     raise ThreadCancelledError("Thread was cancelled")
                 sync_yield_queue.put(res)
@@ -476,6 +291,8 @@ async def iterate_spawned(
         sync_kwargs,
     )  # type: ignore
 
+    it_task: asyncio.Task[R] | None = None
+
     try:
         while True:
             it_task = asyncio.create_task(yield_queue.async_q.get())
@@ -488,11 +305,13 @@ async def iterate_spawned(
 
             for task in finish:
                 if task == iterator_future:
+                    typed_task = cast(asyncio.Task[None], task)
                     if task.exception():
                         finish_condition = task.exception()
 
                 elif task == it_task:
-                    result = task.result()
+                    typed_task = cast(asyncio.Task[R], task)
+                    result = typed_task.result()
                     if isinstance(result, KoilStopIteration):
                         finish_condition = result
                     else:
@@ -513,9 +332,20 @@ async def iterate_spawned(
                     break
     except asyncio.CancelledError as e:
         cancel_event.set()
+        
+        yield_queue.close()
+        next_queue.close()
+        
+        await next_queue.wait_closed()
+        await yield_queue.wait_closed()
 
-        finish, unfinished = await asyncio.wait(
-            [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
-        )
+        if not it_task:
+            await asyncio.wait_for(
+                iterator_future, timeout=koil.cancel_timeout if koil else 2
+            )
+        else:
+            finish, unfinished = await asyncio.wait(
+                [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
+            )
 
         raise e

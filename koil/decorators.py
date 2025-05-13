@@ -1,6 +1,7 @@
 from types import TracebackType
 from koil.helpers import unkoil
-from koil.koil import global_koil, Koil, KoilProtocol
+from koil.koil import Koil, KoilProtocol
+from koil.vars import global_koil
 import inspect
 from typing import Callable, Self, Type, TypeVar
 
@@ -39,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 def koilable(
     fieldname: str = "__koil",
-    loop_field_name: str = "__loop",
     add_connectors: bool = False,
 ) -> Callable[[Type[T]], Type[T]]:
     """

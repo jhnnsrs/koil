@@ -3,15 +3,13 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from koil.decorators import koilable
 from typing import Optional, Self, TypeVar
 from koil.koil import Koil
-import asyncio
 
 T = TypeVar("T")
 
 
-@koilable(fieldname="__koil", loop_field_name="__loop", add_connectors=True)
+@koilable(fieldname="__koil", add_connectors=True)
 class KoiledModel(BaseModel):
     __koil: Optional[Koil] = PrivateAttr(None)
-    __loop: Optional[asyncio.AbstractEventLoop] = PrivateAttr(None)
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     def __enter__(self: Self) -> Self: ...
@@ -59,7 +57,7 @@ class Composition(KoiledModel):
 
     async def __aenter__(self) -> Self:
         await super().__aenter__()
-        for key, value in self:
+        for _, value in self:
             if isinstance(value, Koil):
                 continue  # that was entered before
             if hasattr(value, "__aenter__"):

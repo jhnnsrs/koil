@@ -4,21 +4,30 @@ import inspect
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar, Awaitable
-
+from typing import (
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Generic,
+    Tuple,
+    TypeVar,
+    Awaitable,
+    Concatenate,
+)
+from koil.helpers import get_koiled_loop_or_raise
+from koil.protocols import SignalProtocol
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
 from koil.koil import Koil
-from koil.task import KoilFuture, KoilGeneratorRunner, KoilRunner, KoilYieldFuture
 from koil.utils import (
-    iterate_threaded_with_context_and_signals,
-    run_threaded_with_context_and_signals,
+    run_async_sharing_context,
+    iterate_async_sharing_context,
 )
-from koil.vars import current_loop
 import uuid
-from typing import Protocol
-from .utils import check_is_asyncfunc, check_is_asyncgen, check_is_syncgen
-
+from .utils import  KoilFuture
+from .errors import CancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +35,27 @@ logger = logging.getLogger(__name__)
 Reference = str
 
 
-class UnconnectedSignalError(Exception):
-    pass
-
-
 T = TypeVar("T")
+
+
+
+# Your dynamic signal bundle
+@dataclass
+class QtSignalHolder(Generic[T]):
+    returned: SignalProtocol[Tuple[T, contextvars.Context]]
+    cancelled: SignalProtocol[CancelledError]
+    errored: SignalProtocol[BaseException]
+
+
+@dataclass
+class QtIteratorSignalHolder(Generic[T]):
+    done: SignalProtocol[None]
+    cancelled: SignalProtocol[CancelledError]
+    errored: SignalProtocol[BaseException]
+    next: SignalProtocol[Tuple[T, contextvars.Context]]
+
+def signal_builder(*args: Any) -> SignalProtocol[Any]:
+    return QtCore.Signal(*args)  # type: ignore
 
 
 class QtFuture(QtCore.QObject, Generic[T]):
@@ -48,18 +73,22 @@ class QtFuture(QtCore.QObject, Generic[T]):
 
     """
 
-    cancelled: QtCore.Signal = QtCore.Signal()
+    cancelled: "SignalProtocol[Exception]"
+    cancelled = QtCore.Signal(Exception) # type: ignore
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        parent: QtCore.QObject | None = None,
+    ):
+        super().__init__(parent=parent)
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
-        self.aiofuture = asyncio.Future()
+        self.aiofuture: asyncio.Future[Tuple[contextvars.Context, T]] = asyncio.Future()
         self.iscancelled = False
         self.resolved = False
         self.rejected = False
 
-    def _set_cancelled(self):
+    def set_cancelled(self):
         """WIll be called by the asyncio loop"""
         self.cancelled.emit()
         self.iscancelled = True
@@ -68,9 +97,11 @@ class QtFuture(QtCore.QObject, Generic[T]):
     def done(self):
         return self.resolved or self.rejected or self.iscancelled
 
+    @property
+    def is_cancelled(self):
+        return self.aiofuture.cancelled()
+
     def resolve(self, *args: T):
-        if not args:
-            args = (None,)
         ctx = contextvars.copy_context()
         self.resolved = True
 
@@ -78,7 +109,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
             logger.warning(f"QtFuture {self} already done. Cannot resolve")
             return
 
-        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx,) + args)
+        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, args))
 
     def reject(self, exp: Exception):
         if self.aiofuture.done():
@@ -90,11 +121,11 @@ class QtFuture(QtCore.QObject, Generic[T]):
         self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
 
 
-class KoilStopIteration(Exception):
+class QtStopIteration(Exception):
     pass
 
 
-T = TypeVar("T")
+P = ParamSpec("P")
 
 
 class QtGenerator(QtCore.QObject, Generic[T]):
@@ -110,92 +141,84 @@ class QtGenerator(QtCore.QObject, Generic[T]):
 
     """
 
-    cancelled: QtCore.Signal = QtCore.Signal()
-
     def __init__(self):
         super().__init__()
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
-        self.aioqueue = asyncio.Queue()
+        self.nextfuture: asyncio.Future[Tuple[contextvars.Context, T]] = (
+            asyncio.Future()
+        )
         self.iscancelled = False
 
-    def _set_cancelled(self):
+    def set_cancelled(self):
         """WIll be called by the asyncio loop"""
         self.iscancelled = True
 
     def next(self, args: T):
-        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, args)
+        """Will be called by the asyncio loop"""
+        context = contextvars.copy_context()
 
-    def throw(self, exception):
-        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, exception)
+        self.loop.call_soon_threadsafe(self.nextfuture.set_result, (context, args))
+
+    def throw(self, exception: BaseException):
+        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, exception)
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.aioqueue.put_nowait, KoilStopIteration())
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            res = await self.aioqueue.get()
-            if isinstance(res, KoilStopIteration):
-                raise StopAsyncIteration
-            if isinstance(res, Exception):
-                raise res
-        except asyncio.CancelledError:
-            self.cancelled.emit()
-            raise StopAsyncIteration
-        return res
+        self.loop.call_soon_threadsafe(
+            self.nextfuture.set_exception, QtStopIteration()
+        )
 
 
-T = TypeVar("T")
-P = ParamSpec("P")
-
-
-class QtCoro(QtCore.QObject, Generic[T, P]):
-    called = QtCore.Signal(QtFuture, tuple, dict, object)
-    cancelled = QtCore.Signal(QtFuture)
+class qt_to_async(QtCore.QObject, Generic[T, P]):
+    cancelled: SignalProtocol[Any] = signal_builder(QtFuture) # type: ignore
+    _called: SignalProtocol[
+        Tuple[QtFuture[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
+    ] = signal_builder(object)
 
     def __init__(
         self,
-        coro: Callable[P, T],
-        *args: P.args,
-        autoresolve=False,
-        use_context=True,
-        **kwargs: P.kwargs,
+        coro: Callable[Concatenate[QtFuture[T], P], None],
+        timeout: int | None = None,
+        parent: QtCore.QObject | None = None,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(parent)
         assert not inspect.iscoroutinefunction(coro), (
-            f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
+            "This should not be a coroutine, but a normal qt slot"
         )
         self.coro = coro
-        self.called.connect(self.on_called)
-        self.autoresolve = autoresolve
-        self.use_context = use_context
+        self.timeout = timeout
+        self._called.connect(self.on_called)
 
-    def on_called(self, future, args, kwargs, ctx):
+    def on_called(
+        self,
+        typed_tuple: Tuple[
+            QtFuture[T], Tuple[object, ...], Dict[str, Any], contextvars.Context
+        ],
+    ):
+        qtfuture, args, kwargs, ctx = typed_tuple
+
         try:
-            if self.use_context:
-                for ctx, value in ctx.items():
-                    ctx.set(value)
+            for ctx, value in ctx.items():
+                ctx.set(value)
 
-            if self.autoresolve:
-                x = self.coro(*args, **kwargs)
-                future.resolve(x)
-            else:
-                x = self.coro(future, *args, **kwargs)
+            self.coro(qtfuture, *args, **kwargs)  # type: ignore
 
         except Exception as e:
-            logger.error(f"Error in Qt Coro {self.coro}", exc_info=True)
-            future.reject(e)
+            logger.error(
+                f"Error in Qt Coro even before assignemd {self.coro}", exc_info=True
+            )
+            qtfuture.reject(e)
 
-    async def acall(self, *args: P.args, timeout=None, **kwargs: P.kwargs):
-        qtfuture = QtFuture()
+    async def acall(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        qtfuture: QtFuture[T] = QtFuture()
         ctx = contextvars.copy_context()
-        self.called.emit(qtfuture, args, kwargs, ctx)
+        self._called.emit((qtfuture, args, kwargs, ctx))
+        self.coro(qtfuture, *args, **kwargs)
         try:
-            if timeout:
-                context, x = await asyncio.wait_for(qtfuture.aiofuture, timeout=timeout)
+            if self.timeout:
+                context, x = await asyncio.wait_for(
+                    qtfuture.aiofuture, timeout=self.timeout
+                )
             else:
                 context, x = await qtfuture.aiofuture
 
@@ -205,342 +228,191 @@ class QtCoro(QtCore.QObject, Generic[T, P]):
             return x
 
         except asyncio.CancelledError:
-            qtfuture._set_cancelled()
+            qtfuture.set_cancelled()
             self.cancelled.emit(qtfuture)
             raise
 
 
-class QtYielder(QtCore.QObject, Generic[T, P]):
-    called = QtCore.Signal(QtGenerator, tuple, dict, object)
-    cancelled = QtCore.Signal(QtGenerator)
+class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
+    cancelled: SignalProtocol[Any] = signal_builder(QtFuture)
+    _called: SignalProtocol[
+        Tuple[QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
+    ] = signal_builder(QtFuture, tuple, dict, object)
 
-    def __init__(self, coro: Callable[P, T], use_context=True, **kwargs):
-        super().__init__(**kwargs)
-        assert not inspect.isgeneratorfunction(coro), (
-            f"This should not be a coroutine, but a normal qt slot {'with the first parameter being a qtfuture' if autoresolve is False else ''}"
-        )
-        self.coro = coro
-        self.called.connect(self.on_called)
-        self.use_context = use_context
-
-    def on_called(self, generator: QtGenerator, args, kwargs, ctx):
-        try:
-            self.coro(generator, *args, **kwargs)
-
-        except Exception as e:
-            logger.error(f"Error in QtYieldre {self.coro}", exc_info=True)
-            generator.throw(e)
-
-    async def aiterate(self, *args: P.args, timeout=None, **kwargs: P.kwargs):
-        generator = QtGenerator()
-        ctx = contextvars.copy_context()
-        self.called.emit(generator, args, kwargs, ctx)
-        try:
-            while True:
-                if timeout:
-                    x = await asyncio.wait_for(anext(generator), timeout=timeout)
-                else:
-                    x = await anext(generator)
-
-                yield x
-
-        except StopAsyncIteration:
-            pass
-            return
-
-        except asyncio.CancelledError:
-            generator._set_cancelled()
-            self.cancelled.emit(generator)
-            raise
-
-
-class QtListener:
-    def __init__(self, loop, queue) -> None:
-        self.queue = queue
-        self.loop = loop
-
-    def __call__(self, *args):
-        self.loop.call_soon_threadsafe(self.queue.put_nowait, args)
-
-
-class QtSignal(QtCore.QObject, Generic[T, P]):
     def __init__(
         self,
-        signal: QtCore.Signal,
-        *args,
-        use_context=True,
-        **kwargs,
+        coro: Callable[Concatenate[QtGenerator[T], P], None],
+        timeout: int | None = None,
+        parent: QtCore.QObject | None = None,
     ):
-        super().__init__(*args, **kwargs)
-        self.signal = signal
-        self.signal.connect(self.on_called)
-        self.listeners = {}
-        self.use_context = use_context
-        self._attached = None
+        super().__init__(parent)
+        assert not inspect.iscoroutinefunction(coro), (
+            "This should not be a coroutine, but a normal qt slot"
+        )
+        self.coro = coro
+        self.timeout = timeout
+        self._called.connect(self.on_called)
 
-    def on_called(self, *returns):
-        for listener in self.listeners.values():
-            listener(*returns)
+    def on_called(
+        self,
+        typed_tuple: Tuple[
+            QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context
+        ],
+    ):
+        qtgenerator, args, kwargs, ctx = typed_tuple
 
-    async def aiterate(self, timeout=None):
-        unique_id = uuid.uuid4().hex
-        loop = asyncio.get_event_loop()
-        queue = asyncio.Queue()
-        listener = self.listeners[unique_id] = QtListener(loop, queue)
+        try:
+            for ctx, value in ctx.items():
+                ctx.set(value)
+
+            self.coro(qtgenerator, *args, **kwargs)  # type: ignore
+
+        except Exception as e:
+            logger.error(
+                f"Error in Qt Coro even before assignemd {self.coro}", exc_info=True
+            )
+            qtgenerator.throw(e)
+
+    async def acall(self, *args: P.args, **kwargs: P.kwargs) -> AsyncGenerator[T, None]:
+        qtgenerator: QtGenerator[T] = QtGenerator()
+        ctx = contextvars.copy_context()
+        self._called.emit((qtgenerator, args, kwargs, ctx))
 
         try:
             while True:
-                z = await asyncio.wait_for(listener.queue.get(), timeout=timeout)
-                if len(z) == 1:
-                    z = z[0]
-                yield z
+                if self.timeout:
+                    context, result = await asyncio.wait_for(
+                        qtgenerator.nextfuture, timeout=self.timeout
+                    )
+                else:
+                    context, result = await qtgenerator.nextfuture
 
-        except Exception as e:
-            del self.listeners[unique_id]
-            raise e
+                for ctx, value in context.items():
+                    ctx.set(value)
+
+                yield result
 
         except asyncio.CancelledError:
-            del self.listeners[unique_id]
+            qtgenerator.set_cancelled()
+            self.cancelled.emit(qtgenerator)
             raise
 
-    async def aonce(self, timeout=None):
-        async for i in self.aiterate(timeout=timeout):
-            return i
 
 
-class QtRunner(KoilRunner, QtCore.QObject):
-    started: QtCore.Signal = QtCore.Signal()
-    errored: QtCore.Signal = QtCore.Signal(Exception)
-    cancelled: QtCore.Signal = QtCore.Signal()
-    returned: QtCore.Signal = QtCore.Signal(object)
-    _returnedwithoutcontext = QtCore.Signal(object, object)
 
-    def __init__(self, *args, unique=False, **kwargs):
-        super().__init__(*args, **kwargs)
+
+class async_to_qt(QtCore.QObject, Generic[T, P]):
+    errored: "SignalProtocol[BaseException]" = signal_builder(BaseException)  # type: ignore
+    cancelled: "SignalProtocol[CancelledError]" = signal_builder(CancelledError)  # type: ignore
+    returned: SignalProtocol[T] =  signal_builder(object)  # type: ignore
+    
+    
+    _returnedwithoutcontext: "SignalProtocol[Tuple[T, contextvars.Context]]" =  signal_builder(object)  # type: ignore
+    
+ 
+
+    def __init__(
+        self,
+        function: Callable[P, Awaitable[T]],
+        parent: QtCore.QObject | None = None,
+    ):
+        super().__init__(parent=parent)
+        self.function = function
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
-        self.unique = unique
-        self.last_future = None
-
-    def on_returnedwithoutcontext(self, res, ctxs):
+        
+    def on_returnedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
+        res, ctxs = answer
+        
         for ctx, value in ctxs.items():
             ctx.set(value)
         self.returned.emit(res)
 
-    def run(self, *args: P.args, **kwargs: P.kwargs):
-        if self.unique and self.last_future:
-            self.last_future.cancel()
+    def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[T]:
+        
+        
+        koil_loop = get_koiled_loop_or_raise()
 
-        args = self.args + args
-        kwargs = {**self.kwargs, **kwargs}
-
-        loop = current_loop.get()
-        assert loop is not None, "No loop found"
-        assert loop.is_running(), "Loop is not running"
-        cancel_event = threading.Event()
-
-        future = run_threaded_with_context_and_signals(
-            self.coro,
-            loop,
-            cancel_event,
-            self.started,
-            self._returnedwithoutcontext,
-            self.errored,
-            self.cancelled,
+        my_signals = QtSignalHolder(
+            returned=self._returnedwithoutcontext,
+            cancelled=self.cancelled,
+            errored=self.errored,
+        )
+        
+        
+        return run_async_sharing_context(
+            self.function,
+            koil_loop,
+            my_signals,
             *args,
             **kwargs,
         )
 
-        last_future = KoilFuture(future, cancel_event)
-
-        return last_future
-
+            
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         return self.run(*args, **kwds)
 
 
-class QtGeneratorRunner(KoilGeneratorRunner, QtCore.QObject):
-    errored = QtCore.Signal(Exception)
-    cancelled = QtCore.Signal()
-    yielded = QtCore.Signal(object)
-    done = QtCore.Signal(object)
-    _yieldedwithoutcontext = QtCore.Signal(object, object)
+SendType = TypeVar("SendType")
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+
+
+
+
+
+
+
+class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
+    errored: SignalProtocol[BaseException] = signal_builder(Exception)
+    cancelled: SignalProtocol[CancelledError] = signal_builder(Exception)
+    yielded: SignalProtocol[T] = signal_builder(object)
+    done: SignalProtocol[None] = signal_builder(object)
+    _yieldedwithoutcontext: SignalProtocol[Tuple[T, contextvars.Context]] = signal_builder(object)
+
+    def __init__(
+        self,
+        function: Callable[P, AsyncIterator[T]],
+        unique: bool = False,
+        parent: QtCore.QObject | None = None,
+    ):
+        super().__init__(parent=parent)
+        self.function = function
         self._yieldedwithoutcontext.connect(self.on_yieldedwithoutcontext)
 
-    def on_yieldedwithoutcontext(self, x, context):
-        for ctx, value in context.items():
-            ctx.set(value)
-
-        self.yielded.emit(x)
-
-    async def wrapped_future(self, args, kwargs, ctxs):
+    def on_yieldedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
+        res, ctxs = answer
+        
+        
         for ctx, value in ctxs.items():
             ctx.set(value)
 
-        try:
-            args = self.args + args
-            kwargs = {**self.kwargs, **kwargs}
-            async for i in self.iterator(*args, **kwargs):
-                newcontext = contextvars.copy_context()
-                self._yieldedwithoutcontext.emit(i, newcontext)
-        except Exception as e:
-            self.errored.emit(e)
-        except asyncio.CancelledError:
-            self.cancelled.emit()
+        self.yielded.emit(res)
 
-    def run(self, *args, **kwargs):
-        args = self.args + args
-        kwargs = {**self.kwargs, **kwargs}
-        cancel_event = threading.Event()
-        loop = current_loop.get()
-        assert loop is not None, "No loop found"
-        assert loop.is_running(), "Loop is not running"
 
-        future = iterate_threaded_with_context_and_signals(
-            self.iterator,
-            loop,
-            cancel_event,
-            self._yieldedwithoutcontext,
-            self.errored,
-            self.cancelled,
-            self.done,
+    def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[None]:
+        koil_loop = get_koiled_loop_or_raise()
+
+        my_signals = QtIteratorSignalHolder(
+            done=self.done,
+            cancelled=self.cancelled,
+            errored=self.errored,
+            next=self._yieldedwithoutcontext,
+        )
+
+        return iterate_async_sharing_context(
+            self.function,
+            koil_loop,
+            my_signals,
             *args,
             **kwargs,
         )
-        return KoilYieldFuture(future, cancel_event)
+        
+        
 
-
-def async_generator_to_qt(func):
-    return QtGeneratorRunner(func)
-
-
-def async_to_qt(func, unique=False):
-    """ " Converts an async function to a QtRunner
-
-    Args:
-        func: The async function to convert
-        unique: If True, only one instance of the function can be running at a time
-
-    Returns:
-        QtRunner: The QtRunner instance
-
-    """
-
-    return QtRunner(func, unique=unique)
-
-
-def qt_to_async(func, autoresolve=False, use_context=True):
-    return QtCoro(func, autoresolve=autoresolve, use_context=use_context).acall
-
-
-def qtgenerator_to_async(func):
-    return QtGenerator(func)
-
-
-class UnkoiledQt(Protocol):
-    errored: QtCore.Signal
-    cancelled: QtCore.Signal
-    yielded: QtCore.Signal
-    done: QtCore.Signal
-    returned: QtCore.Signal
-
-    def run(self, *args, **kwargs) -> KoilFuture:
-        """Runs the function in the governing loop and returns a KoilFuture
-
-        This is useful if you want to cancel the function from the outside.
-        The function will be run in the governing loop and the result will be
-        send to the main thread via a QtSignal.
-
-        Args:
-            *args: The arguments for the function
-            **kwargs: The keyword arguments for the function
-
-        Returns:
-            KoilFuture: The future that can be cancelled
-
-        """
-        ...
-
-
-class KoilQt(Protocol):
-    errored: QtCore.Signal
-    cancelled: QtCore.Signal
-    yielded: QtCore.Signal
-    done: QtCore.Signal
-    returned: QtCore.Signal
-
-    def run(self, *args, **kwargs) -> KoilFuture:
-        """Runs the function in the governing loop and returns a KoilFuture
-
-        This is useful if you want to cancel the function from the outside.
-        The function will be run in the governing loop and the result will be
-        send to the main thread via a QtSignal.
-
-        Args:
-            *args: The arguments for the function
-            **kwargs: The keyword arguments for the function
-
-        Returns:
-            KoilFuture: The future that can be cancelled
-
-        """
-        ...
-
-
-def unkoilqt(func, *args, **kwargs) -> UnkoiledQt:
-    """Unkoils a function so that it can be run in the main thread
-
-    Args:
-        func (Callable): The function to run in the main thread
-
-
-
-    """
-
-    if not (check_is_asyncgen(func) or check_is_asyncfunc(func)):
-        raise TypeError(f"{func} is not an async function")
-
-    if check_is_asyncgen(func):
-        return async_generator_to_qt(func, *args, **kwargs)
-
-    else:
-        return async_to_qt(func, *args, **kwargs)
-
-
-def koilqt(func, *args, autoresolve=None, **kwargs) -> Callable[..., Awaitable[Any]]:
-    """Converts a qt mainthread function to be run in the asyncio loop
-
-    Args:
-        func (Callable): The function to run in the main thread (can also
-        be a generator)
-
-    Returns:
-        Callable[..., Awaitable[Any]]: The function that can be run in the
-        asyncio loop
-
-    """
-
-    if check_is_asyncgen(func) or check_is_asyncfunc(func):
-        raise TypeError(
-            f"{func} should NOT be a coroutine function. This is a decorator to convert a function to be callable form the asyncio loop"
-        )
-
-    if check_is_syncgen(func):
-        if autoresolve is not None or autoresolve is True:
-            raise TypeError("Cannot autoresolve a generator")
-        return qtgenerator_to_async(func, *args, **kwargs)
-
-    else:
-        if autoresolve is None:
-            autoresolve = True
-        return qt_to_async(func, *args, autoresolve=autoresolve, **kwargs)
 
 
 class WrappedObject(QtCore.QObject):
-    def __init__(self, *args, koil: Koil = None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, koil: Koil, parent: QtCore.QObject | None = None):
+        super().__init__(parent=parent)
         self.koil = koil
         self._hooked_close_event = self.parent().closeEvent
         self.parent().closeEvent = self.on_close_event
@@ -577,6 +449,31 @@ class QtKoil(Koil):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+
+
+
+class QtKoilMixin(QtWidgets.QWidget):
+    """A mixin that allows you to use Koil in a Qt application.
+
+    This mixin will automatically enter and exit the Koil loop when the
+    application is started and stopped. It will also automatically set the
+    Koil loop as the current loop for the application.
+
+    """
+
+    def __init__(self, *args, **kwargs): #type: ignore
+        super().__init__(*args, **kwargs) # type: ignore
+        self._koil = create_qt_koil(parent=self, auto_enter=False)
+
+    @property
+    def koil(self) -> QtKoil:
+        return self._koil
+
+
+
+
 
 
 def create_qt_koil(parent: QtCore.QObject, auto_enter: bool = True) -> QtKoil:

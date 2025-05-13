@@ -15,11 +15,11 @@ class T(object):
     def __init__(self) -> None:
         pass
 
-    async def a(self, a):
+    async def a(self, a: int) -> int:
         await asyncio.sleep(1)
         return 5
 
-    def t(self, a):
+    def t(self, a: int) -> int:
         return unkoil(self.a, a)
 
     async def __aenter__(self):
@@ -64,6 +64,9 @@ class X(KoiledModel):
 
 
 async def test_async():
+    
+    
+    
     async with X(x=1) as x:
         x = asyncio.create_task(x.t())
         await asyncio.sleep(0.02)

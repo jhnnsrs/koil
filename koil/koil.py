@@ -1,43 +1,22 @@
 import asyncio
 from contextlib import contextmanager
-import contextvars
-from dataclasses import dataclass
 import os
 import sys
 import threading
 from types import TracebackType
-from typing import Optional, Protocol, Self
-
+from typing import Protocol, Self
+from koil.vars import global_koil, global_koil_loop
 from koil.errors import ContextError
 import time
 import logging
+try:
+    import uvloop # type: ignore[import]
+except ImportError:
+    uvloop = None
 
-
-class KoiledLoop(Protocol):
-    @property
-    def loop(self) -> asyncio.AbstractEventLoop: ...
-
-    @property
-    def cancel_timeout(self) -> float: ...
-
-    @property
-    def sync_in_async(self) -> bool: ...
-
-
-global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextVar(
-    "GLOBAL_KOIL", default=None
-)
-global_koil_loop: contextvars.ContextVar[Optional[asyncio.AbstractEventLoop]] = (
-    contextvars.ContextVar("GLOBAL_KOIL_LOOP", default=None)
-)
 
 
 logger = logging.getLogger(__name__)
-
-try:
-    import uvloop
-except ImportError:
-    uvloop = None
 
 
 class KoilProtocol(Protocol):
@@ -148,7 +127,6 @@ class Koil:
         try:
             self._loop = asyncio.get_running_loop()
             global_koil_loop.set(self._loop)
-            print("Setting up koil loop. Locally")
         except RuntimeError:
             pass
         return self
@@ -184,7 +162,6 @@ class Koil:
             )
             global_koil.set(self)
             global_koil_loop.set(self._loop)
-            print("Setting up koil loop. GLobally")
         self.running = True
         return self
 

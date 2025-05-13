@@ -1,7 +1,4 @@
 import asyncio
-import pytest
-from koil.errors import ContextError
-import os
 from koil.helpers import unkoil, unkoil_gen
 from .context import AsyncContextManager
 from koil import Koil
@@ -22,7 +19,7 @@ async def iterating():
 
 def test_sync_context():
     with AsyncContextManager() as c:
-        print(c.aprint())
+        assert unkoil(c.aprint) == "sss", "Koil realized its async and was okay with that"
 
 
 async def test_async_context():
