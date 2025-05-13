@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import concurrent.futures
 import threading
-from typing import Any, AsyncIterator, Awaitable, Callable, Generic, ParamSpec, Tuple, TypeVar, cast
+from typing import  AsyncIterator, Awaitable, Callable, Generic, ParamSpec, Tuple, TypeVar, cast
 from koil.errors import CancelledError, ThreadCancelledError
 from koil.types import AnyCallable
 from koil.vars import current_cancel_event

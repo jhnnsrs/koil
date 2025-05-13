@@ -1,8 +1,6 @@
 import asyncio
-import concurrent.futures
 import threading
 
-import concurrent
 import janus
 from koil.errors import (
     KoilError,
@@ -17,7 +15,7 @@ from koil.vars import (
 )
 import contextvars
 import logging
-from typing import Callable, Dict, Generic, Tuple, TypeVar
+from typing import Callable, Dict, Tuple, TypeVar
 from koil.utils import run_async_sharing_context, KoilFuture
 
 
@@ -91,7 +89,7 @@ def unkoil_gen(
         if send_val is None:
             future = run_async_sharing_context(ait.__anext__, koil_loop, None)
         else:
-            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)
+            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val) # type: ignore
 
         try:
             send_val = yield future.result()
@@ -185,7 +183,7 @@ async def run_spawned(
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
 
-        return sync_func(*sync_args, **sync_kwargs)
+        return sync_func(*sync_args, **sync_kwargs) # type: ignore
 
     context = contextvars.copy_context()
     cancel_event = threading.Event()
@@ -297,7 +295,7 @@ async def iterate_spawned(
         while True:
             it_task = asyncio.create_task(yield_queue.async_q.get())
 
-            finish, unfinished = await asyncio.wait(
+            finish, _ = await asyncio.wait(
                 [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
             )
 
@@ -344,7 +342,7 @@ async def iterate_spawned(
                 iterator_future, timeout=koil.cancel_timeout if koil else 2
             )
         else:
-            finish, unfinished = await asyncio.wait(
+            finish, _ = await asyncio.wait(
                 [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
             )
 

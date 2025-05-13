@@ -131,7 +131,14 @@ class Koil:
             pass
         return self
 
-    async def __aexit__(self, *args, **kwargs):
+    async def __aexit__(
+        self, 
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None
+    ) -> None:
+        
+        
         global_koil.set(None)  # type: ignore[assignment]
         return None
 

@@ -2,7 +2,6 @@ import asyncio
 import contextvars
 import inspect
 import logging
-import threading
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -109,7 +108,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
             logger.warning(f"QtFuture {self} already done. Cannot resolve")
             return
 
-        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, args))
+        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, args)) # type: ignore
 
     def reject(self, exp: Exception):
         if self.aiofuture.done():
@@ -414,14 +413,15 @@ class WrappedObject(QtCore.QObject):
     def __init__(self, koil: Koil, parent: QtCore.QObject | None = None):
         super().__init__(parent=parent)
         self.koil = koil
-        self._hooked_close_event = self.parent().closeEvent
-        self.parent().closeEvent = self.on_close_event
+        self._hooked_close_event = self.parent().closeEvent # type: ignore
+        self.parent().closeEvent = self.on_close_event # type: ignore
         self.parent().destroyed.connect(self.destroyedEvent)
 
-    def on_close_event(self, event):
+    def on_close_event(self, event: QtCore.QEvent) -> None: 
+        """Hook the close event to exit the Koil loop"""
         if self.koil.running:
             self.koil.__exit__(None, None, None)
-        self._hooked_close_event(event)
+        self._hooked_close_event(event) # type: ignore
 
     def destroyedEvent(self):
         if hasattr(self, "koil"):
