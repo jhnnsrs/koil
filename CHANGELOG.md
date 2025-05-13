@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v2.0.1 (2025-05-13)
+
+### Bug Fixes
+
+- Change Readme
+  ([`eb56ea2`](https://github.com/jhnnsrs/koil/commit/eb56ea2d372706f5bface613a3f803f4c0ff47de))
+
+
 ## v2.0.0 (2025-05-13)
 
 ### Features
