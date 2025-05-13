@@ -1,9 +1,15 @@
 # CHANGELOG
 
 
+## v2.0.2 (2025-05-13)
+
+
 ## v2.0.1 (2025-05-13)
 
 ### Bug Fixes
+
+- Added py typed marked
+  ([`6d0b004`](https://github.com/jhnnsrs/koil/commit/6d0b00439e2a6833f603c8081be12941e9a8e2f7))
 
 - Change Readme
   ([`eb56ea2`](https://github.com/jhnnsrs/koil/commit/eb56ea2d372706f5bface613a3f803f4c0ff47de))
