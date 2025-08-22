@@ -9,11 +9,11 @@ from koil.vars import global_koil, global_koil_loop
 from koil.errors import ContextError
 import time
 import logging
+
 try:
-    import uvloop # type: ignore[import]
+    import uvloop  # type: ignore[import]
 except ImportError:
     uvloop = None
-
 
 
 logger = logging.getLogger(__name__)
@@ -129,16 +129,15 @@ class Koil:
             global_koil_loop.set(self._loop)
         except RuntimeError:
             pass
+
         return self
 
     async def __aexit__(
-        self, 
+        self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: TracebackType | None
+        exc_tb: TracebackType | None,
     ) -> None:
-        
-        
         global_koil.set(None)  # type: ignore[assignment]
         return None
 

@@ -34,30 +34,28 @@ R = TypeVar("R")
 SendType = TypeVar("SendType")
 
 
-
-
 def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
     koil_loop = global_koil_loop.get()
 
     if not koil_loop:
-        raise RuntimeError("No koil context found")
+        raise KoilError("No koil context found")
 
     try:
-        loop0 = asyncio.events.get_running_loop()
+        loop0 = asyncio.get_event_loop()
         if koil_loop == loop0:
-            raise NotImplementedError(
+            raise KoilError(
                 "Calling unkoil() from within a running loop. This is not supported"
             )
         else:
             koil = global_koil.get()
             if koil:
                 if not koil.sync_in_async:
-                    raise NotImplementedError(
+                    raise KoilError(
                         "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
                     )
             else:
                 # We are neither in a top level koil loop (i.e. we have always been async)
-                raise NotImplementedError(
+                raise KoilError(
                     "Calling unkoil() from within a running loop. while koil doens't allow it. This is not supported"
                 )
             # TODO: Check if async in sync is set to true
@@ -67,9 +65,8 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
 
     if koil_loop.is_closed():
         raise RuntimeError("Loop is not running")
-    
-    return koil_loop
 
+    return koil_loop
 
 
 def unkoil_gen(
@@ -79,9 +76,7 @@ def unkoil_gen(
 ) -> Generator[R, SendType, None]:
     koil_loop = get_koiled_loop_or_raise()
 
-
     ait = iterator(*args, **kwargs).__aiter__()
-
 
     future = run_async_sharing_context(ait.__anext__, koil_loop, None)
     send_val = yield future.result()
@@ -89,7 +84,7 @@ def unkoil_gen(
         if send_val is None:
             future = run_async_sharing_context(ait.__anext__, koil_loop, None)
         else:
-            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val) # type: ignore
+            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)  # type: ignore
 
         try:
             send_val = yield future.result()
@@ -108,9 +103,11 @@ def unkoil(
     koil_loop = get_koiled_loop_or_raise()
 
     context_aware_future = run_async_sharing_context(
-        coro, koil_loop, None, *args, **kwargs)
-    
+        coro, koil_loop, None, *args, **kwargs
+    )
+
     return context_aware_future.result()
+
 
 class KoilThreadSafeEvent(asyncio.Event):
     def __init__(self, koil_loop: asyncio.AbstractEventLoop):
@@ -148,7 +145,6 @@ def unkoil_task(
     )
 
 
-
 async def run_spawned(
     sync_func: Callable[P, R],
     *sync_args: P.args,
@@ -165,7 +161,6 @@ async def run_spawned(
         assert koil_loop == loop, (
             "You are trying to run a koil generator in a different loop than the one it was created in"
         )
-        
 
     def wrapper(
         cancel_event: threading.Event,
@@ -173,17 +168,15 @@ async def run_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> R:
-
         for ctx, value in context.items():
             ctx.set(value)
-            
-        
+
         # This needs to happend after the context is set
         global_koil.set(koil)
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
 
-        return sync_func(*sync_args, **sync_kwargs) # type: ignore
+        return sync_func(*sync_args, **sync_kwargs)  # type: ignore
 
     context = contextvars.copy_context()
     cancel_event = threading.Event()
@@ -203,7 +196,7 @@ async def run_spawned(
         cancel_event.set()
 
         try:
-            await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 2)
+            await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 10)
         except ThreadCancelledError:
             logging.info("Future in another thread was sucessfully cancelled")
         except asyncio.TimeoutError as te:
@@ -247,16 +240,13 @@ async def iterate_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> None:
-
         for ctx, value in context.items():
             ctx.set(value)
-                
-                
-         # This needs to happend after the context is set
+
+        # This needs to happend after the context is set
         global_koil.set(koil)
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
-        
 
         generator = cast(Generator[R, S, None], sync_gen(*sync_args, **sync_kwargs))  # type: ignore
         it = generator.__iter__()
@@ -330,10 +320,10 @@ async def iterate_spawned(
                     break
     except asyncio.CancelledError as e:
         cancel_event.set()
-        
+
         yield_queue.close()
         next_queue.close()
-        
+
         await next_queue.wait_closed()
         await yield_queue.wait_closed()
 

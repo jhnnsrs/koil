@@ -25,7 +25,7 @@ from koil.utils import (
     iterate_async_sharing_context,
 )
 import uuid
-from .utils import  KoilFuture
+from .utils import KoilFuture
 from .errors import CancelledError
 
 logger = logging.getLogger(__name__)
@@ -37,13 +37,13 @@ Reference = str
 T = TypeVar("T")
 
 
-
 # Your dynamic signal bundle
 @dataclass
 class QtSignalHolder(Generic[T]):
     returned: SignalProtocol[Tuple[T, contextvars.Context]]
     cancelled: SignalProtocol[CancelledError]
     errored: SignalProtocol[BaseException]
+    called: SignalProtocol[None]
 
 
 @dataclass
@@ -52,6 +52,7 @@ class QtIteratorSignalHolder(Generic[T]):
     cancelled: SignalProtocol[CancelledError]
     errored: SignalProtocol[BaseException]
     next: SignalProtocol[Tuple[T, contextvars.Context]]
+
 
 def signal_builder(*args: Any) -> SignalProtocol[Any]:
     return QtCore.Signal(*args)  # type: ignore
@@ -73,7 +74,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
     """
 
     cancelled: "SignalProtocol[Exception]"
-    cancelled = QtCore.Signal(Exception) # type: ignore
+    cancelled = QtCore.Signal(Exception)  # type: ignore
 
     def __init__(
         self,
@@ -163,13 +164,11 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         self.loop.call_soon_threadsafe(self.nextfuture.set_exception, exception)
 
     def stop(self):
-        self.loop.call_soon_threadsafe(
-            self.nextfuture.set_exception, QtStopIteration()
-        )
+        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, QtStopIteration())
 
 
 class qt_to_async(QtCore.QObject, Generic[T, P]):
-    cancelled: SignalProtocol[Any] = signal_builder(QtFuture) # type: ignore
+    cancelled: SignalProtocol[Any] = signal_builder(QtFuture)  # type: ignore
     _called: SignalProtocol[
         Tuple[QtFuture[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
     ] = signal_builder(object)
@@ -297,18 +296,15 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
             raise
 
 
-
-
-
 class async_to_qt(QtCore.QObject, Generic[T, P]):
+    called: "SignalProtocol[None]" = signal_builder(object, tuple, dict, object)  # type: ignore
     errored: "SignalProtocol[BaseException]" = signal_builder(BaseException)  # type: ignore
     cancelled: "SignalProtocol[CancelledError]" = signal_builder(CancelledError)  # type: ignore
-    returned: SignalProtocol[T] =  signal_builder(object)  # type: ignore
-    
-    
-    _returnedwithoutcontext: "SignalProtocol[Tuple[T, contextvars.Context]]" =  signal_builder(object)  # type: ignore
-    
- 
+    returned: SignalProtocol[T] = signal_builder(object)  # type: ignore
+
+    _returnedwithoutcontext: "SignalProtocol[Tuple[T, contextvars.Context]]" = (
+        signal_builder(object)
+    )  # type: ignore
 
     def __init__(
         self,
@@ -318,26 +314,24 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
         super().__init__(parent=parent)
         self.function = function
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
-        
+
     def on_returnedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
         res, ctxs = answer
-        
+
         for ctx, value in ctxs.items():
             ctx.set(value)
         self.returned.emit(res)
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[T]:
-        
-        
         koil_loop = get_koiled_loop_or_raise()
 
         my_signals = QtSignalHolder(
             returned=self._returnedwithoutcontext,
             cancelled=self.cancelled,
             errored=self.errored,
+            called=self.called,
         )
-        
-        
+
         return run_async_sharing_context(
             self.function,
             koil_loop,
@@ -346,7 +340,6 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
             **kwargs,
         )
 
-            
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         return self.run(*args, **kwds)
 
@@ -354,18 +347,14 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
 SendType = TypeVar("SendType")
 
 
-
-
-
-
-
-
 class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
     errored: SignalProtocol[BaseException] = signal_builder(Exception)
     cancelled: SignalProtocol[CancelledError] = signal_builder(Exception)
     yielded: SignalProtocol[T] = signal_builder(object)
     done: SignalProtocol[None] = signal_builder(object)
-    _yieldedwithoutcontext: SignalProtocol[Tuple[T, contextvars.Context]] = signal_builder(object)
+    _yieldedwithoutcontext: SignalProtocol[Tuple[T, contextvars.Context]] = (
+        signal_builder(object)
+    )
 
     def __init__(
         self,
@@ -379,13 +368,11 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
 
     def on_yieldedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
         res, ctxs = answer
-        
-        
+
         for ctx, value in ctxs.items():
             ctx.set(value)
 
         self.yielded.emit(res)
-
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[None]:
         koil_loop = get_koiled_loop_or_raise()
@@ -404,24 +391,23 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
             *args,
             **kwargs,
         )
-        
-        
-
 
 
 class WrappedObject(QtCore.QObject):
     def __init__(self, koil: Koil, parent: QtCore.QObject | None = None):
         super().__init__(parent=parent)
         self.koil = koil
-        self._hooked_close_event = self.parent().closeEvent # type: ignore
-        self.parent().closeEvent = self.on_close_event # type: ignore
-        self.parent().destroyed.connect(self.destroyedEvent)
+        self._parent = self.parent()
+        if self._parent:
+            self._hooked_close_event = self._parent.closeEvent  # type: ignore
+            self._parent.closeEvent = self.on_close_event  # type: ignore
+            self._parent.destroyed.connect(self.destroyedEvent)
 
-    def on_close_event(self, event: QtCore.QEvent) -> None: 
+    def on_close_event(self, event: QtCore.QEvent) -> None:
         """Hook the close event to exit the Koil loop"""
         if self.koil.running:
             self.koil.__exit__(None, None, None)
-        self._hooked_close_event(event) # type: ignore
+        self._hooked_close_event(event)  # type: ignore
 
     def destroyedEvent(self):
         if hasattr(self, "koil"):
@@ -447,12 +433,6 @@ class QtKoil(Koil):
             raise NotImplementedError("Qt Application not found")
         return self
 
-    class Config:
-        arbitrary_types_allowed = True
-
-
-
-
 
 class QtKoilMixin(QtWidgets.QWidget):
     """A mixin that allows you to use Koil in a Qt application.
@@ -463,17 +443,13 @@ class QtKoilMixin(QtWidgets.QWidget):
 
     """
 
-    def __init__(self, *args, **kwargs): #type: ignore
-        super().__init__(*args, **kwargs) # type: ignore
+    def __init__(self, *args, **kwargs):  # type: ignore
+        super().__init__(*args, **kwargs)  # type: ignore
         self._koil = create_qt_koil(parent=self, auto_enter=False)
 
     @property
     def koil(self) -> QtKoil:
         return self._koil
-
-
-
-
 
 
 def create_qt_koil(parent: QtCore.QObject, auto_enter: bool = True) -> QtKoil:
