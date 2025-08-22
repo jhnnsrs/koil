@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v2.0.5 (2025-08-22)
+
+### Bug Fixes
+
+- Add some more typing
+  ([`848d1d2`](https://github.com/jhnnsrs/koil/commit/848d1d2421cd831bbf82978b856e78a9d0908fd6))
+
+
 ## v2.0.4 (2025-05-13)
 
 ### Bug Fixes
