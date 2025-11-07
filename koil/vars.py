@@ -16,6 +16,9 @@ class KoiledLoop(Protocol):
     def sync_in_async(self) -> bool: ...
 
 
+
+
+
 global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextVar(
     "GLOBAL_KOIL", default=None
 )

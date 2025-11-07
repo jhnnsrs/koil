@@ -211,7 +211,6 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
         qtfuture: QtFuture[T] = QtFuture()
         ctx = contextvars.copy_context()
         self._called.emit((qtfuture, args, kwargs, ctx))
-        self.coro(qtfuture, *args, **kwargs)
         try:
             if self.timeout:
                 context, x = await asyncio.wait_for(

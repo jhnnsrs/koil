@@ -41,7 +41,7 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
         raise KoilError("No koil context found")
 
     try:
-        loop0 = asyncio.get_event_loop()
+        loop0 = asyncio.get_running_loop()
         if koil_loop == loop0:
             raise KoilError(
                 "Calling unkoil() from within a running loop. This is not supported"
