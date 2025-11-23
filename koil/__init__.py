@@ -1,4 +1,11 @@
-from .helpers import unkoil, unkoil_gen, unkoil_task, iterate_spawned, run_spawned
+from .helpers import (
+    unkoil,
+    unkoil_gen,
+    unkoil_task,
+    iterate_spawned,
+    run_spawned,
+    sleep,
+)
 from .decorators import koilable
 from .errors import CancelledError
 from .types import Contextual
@@ -15,6 +22,7 @@ __all__ = [
     "CancelledError",
     "Contextual",
     "Koil",
+    "sleep",
     "check_cancelled",
     "iterate_spawned",
     "run_spawned",

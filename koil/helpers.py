@@ -69,6 +69,29 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
     return koil_loop
 
 
+def sleep(seconds: float, event_wait_time: float = 0.1) -> None:
+    """
+    Sleep for a given number of seconds in a koil-compatible way.
+    This function can be called from both sync and async contexts.
+    """
+    koil_loop = get_koiled_loop_or_raise()
+
+    event = threading.Event()
+
+    def timer_callback():
+        event.set()
+
+    koil_loop.call_later(seconds, timer_callback)
+
+    # Wait until the event is set
+    while not event.is_set():
+        event.wait(timeout=event_wait_time)
+        # Check for cancellation
+        cancel_event = current_cancel_event.get()
+        if cancel_event and cancel_event.is_set():
+            raise ThreadCancelledError("Sleep was cancelled")
+
+
 def unkoil_gen(
     iterator: Callable[P, AsyncGenerator[R, SendType]],
     *args: P.args,
