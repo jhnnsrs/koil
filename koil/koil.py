@@ -91,6 +91,9 @@ def get_threaded_loop(name: str = "KoilLoop", uvify: bool = True):
         newloop = asyncio.new_event_loop()
 
     th = threading.Thread(target=run_threaded_event_loop, args=(newloop,), name=name)
+
+    th.pydev_do_not_trace = os.getenv("KOIL_DO_TRACE", "0") == "0"
+    th.is_pydev_daemon_thread = os.getenv("KOIL_DO_TRACE", "0") == "0"
     th.daemon = True
     th.start()
 
