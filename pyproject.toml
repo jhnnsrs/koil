@@ -1,6 +1,6 @@
 [project]
 name = "koil"
-version = "2.3.0"
+version = "2.4.0"
 description = "Async for a sync world"
 authors = [{ name = "jhnnsrs", email = "jhnnsrs@gmail.com" }]
 requires-python = ">=3.11"
