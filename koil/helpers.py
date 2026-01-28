@@ -180,12 +180,6 @@ async def run_spawned(
     """
     loop = asyncio.get_running_loop()
 
-    koil_loop = global_koil_loop.get()
-    if koil_loop:
-        assert koil_loop == loop, (
-            "You are trying to run a koil function in a different loop than the one it was created in"
-        )
-
     koil = global_koil.get()
 
     def wrapper(
@@ -246,12 +240,7 @@ async def iterate_spawned(
     """
 
     loop = asyncio.get_running_loop()
-
-    koil_loop = global_koil_loop.get()
-    if koil_loop:
-        assert koil_loop == loop, (
-            "You are trying to run a koil function in a different loop than the one it was created in"
-        )
+    koil = global_koil.get()
 
     yield_queue: janus.Queue[R] = janus.Queue()
     next_queue: janus.Queue[S] = janus.Queue()
