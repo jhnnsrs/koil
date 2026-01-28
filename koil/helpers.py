@@ -33,6 +33,8 @@ R = TypeVar("R")
 
 SendType = TypeVar("SendType")
 
+KOIL_CANCEL_TIMEOUT = 10.0
+
 
 def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
     koil_loop = global_koil_loop.get()
@@ -178,12 +180,13 @@ async def run_spawned(
     """
     loop = asyncio.get_running_loop()
 
-    koil = global_koil.get()
-    if koil:
-        koil_loop = koil.loop
+    koil_loop = global_koil_loop.get()
+    if koil_loop:
         assert koil_loop == loop, (
-            "You are trying to run a koil generator in a different loop than the one it was created in"
+            "You are trying to run a koil function in a different loop than the one it was created in"
         )
+
+    koil = global_koil.get()
 
     def wrapper(
         cancel_event: threading.Event,
@@ -244,11 +247,10 @@ async def iterate_spawned(
 
     loop = asyncio.get_running_loop()
 
-    koil = global_koil.get()
-    if koil:
-        koil_loop = koil.loop
+    koil_loop = global_koil_loop.get()
+    if koil_loop:
         assert koil_loop == loop, (
-            "You are trying to run a koil generator in a different loop than the one it was created in"
+            "You are trying to run a koil function in a different loop than the one it was created in"
         )
 
     yield_queue: janus.Queue[R] = janus.Queue()
@@ -267,7 +269,6 @@ async def iterate_spawned(
             ctx.set(value)
 
         # This needs to happend after the context is set
-        global_koil.set(koil)
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
 
@@ -351,9 +352,7 @@ async def iterate_spawned(
         await yield_queue.wait_closed()
 
         if not it_task:
-            await asyncio.wait_for(
-                iterator_future, timeout=koil.cancel_timeout if koil else 2
-            )
+            await asyncio.wait_for(iterator_future, timeout=KOIL_CANCEL_TIMEOUT)
         else:
             finish, _ = await asyncio.wait(
                 [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
