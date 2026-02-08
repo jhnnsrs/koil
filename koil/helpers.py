@@ -196,7 +196,13 @@ async def run_spawned(
         global_koil_loop.set(loop)
         current_cancel_event.set(cancel_event)
 
-        return sync_func(*sync_args, **sync_kwargs)  # type: ignore
+        try:
+            return sync_func(*sync_args, **sync_kwargs)  # type: ignore
+        except StopIteration as e:
+            # We transform it so asyncio doesn't swallow it or crash
+            raise RuntimeError("Threaded function raised StopIteration") from e
+        except Exception as e:
+            raise e
 
     context = contextvars.copy_context()
     cancel_event = threading.Event()
