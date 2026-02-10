@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 
 import janus
 from koil.errors import (
@@ -76,7 +77,10 @@ def sleep(seconds: float, event_wait_time: float = 0.1) -> None:
     Sleep for a given number of seconds in a koil-compatible way.
     This function can be called from both sync and async contexts.
     """
-    koil_loop = get_koiled_loop_or_raise()
+    try:
+        koil_loop = get_koiled_loop_or_raise()
+    except KoilError:
+        return time.sleep(seconds)
 
     event = threading.Event()
 
