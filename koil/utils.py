@@ -219,7 +219,7 @@ def run_async_sharing_context(
                     except asyncio.CancelledError:
                         pass  # we are not interested in this and it should always be fine
 
-                error = CancelledError(f"Future {task} was cancelled")
+                error = asyncio.CancelledError(f"Future {task} was cancelled")
 
                 if signals:
                     signals.cancelled.emit(error)
