@@ -1,3 +1,5 @@
+import typing
+import typing_extensions
 import asyncio
 import threading
 import time
@@ -18,12 +20,7 @@ import contextvars
 import logging
 from typing import Callable, Dict, Tuple, TypeVar
 from koil.utils import run_async_sharing_context, KoilFuture
-
-
-try:
-    from typing import ParamSpec
-except ImportError:
-    from typing_extensions import ParamSpec
+from typing import ParamSpec
 
 
 from typing import Coroutine, Any, Union, Awaitable, Generator
