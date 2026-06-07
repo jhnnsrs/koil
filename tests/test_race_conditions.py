@@ -22,7 +22,7 @@ from typing import Callable
 
 import pytest
 
-from koil.helpers import run_spawned, unkoil, unkoil_task
+from koil.helpers import run_spawned, unkoil, unkoil_gen, unkoil_task
 from koil.koil import Koil, get_threaded_loop
 from koil.vars import current_cancel_event, global_koil_loop
 
@@ -51,27 +51,41 @@ async def _quick() -> int:
     return 42
 
 
+async def _quick_gen():
+    for i in range(5):
+        await asyncio.sleep(0)
+        yield i
+
+
 # --------------------------------------------------------------------------- #
-# A1 - the cancel bridge must not leak one OS thread per call
+# A1 - the cancel bridge must not spawn a helper thread per call
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(30)
-def test_unkoil_does_not_leak_helper_threads():
-    """Every unkoil() used to spawn a daemon thread blocked forever on an
-    Event that is never set. After the fix the helper threads are bounded and
-    must drain back to the baseline."""
+def test_unkoil_does_not_spawn_helper_threads():
+    """The cancel signal is now a thread-safe asyncio.Event awaited directly in
+    the loop, so no bridging thread is created. Previously ``unkoil`` spawned a
+    daemon thread per call and ``unkoil_gen`` spawned one *per yielded item*;
+    asserting a flat total thread count is the strongest guard for the new
+    mechanism."""
     with Koil():
-        base = len(_threads_named("wait_in_thread"))
+        base = threading.active_count()
+        peak = base
         for _ in range(50):
             assert unkoil(_quick) == 42
+            peak = max(peak, threading.active_count())
+        # unkoil_gen previously spawned one daemon thread for every yield.
+        for _ in range(10):
+            assert list(unkoil_gen(_quick_gen)) == [0, 1, 2, 3, 4]
+            peak = max(peak, threading.active_count())
 
-        # The watcher threads poll with a small interval, so they exit shortly
-        # after each call completes - give them a moment to drain.
-        assert _wait_until(
-            lambda: len(_threads_named("wait_in_thread")) <= base, timeout=10.0
-        ), (
-            "wait_in_thread helper threads leaked: "
-            f"{len(_threads_named('wait_in_thread'))} still alive (base {base})"
+        # Peak (not just post-settle) thread count must stay at the baseline:
+        # the old bridge spawned a short-lived daemon per call/item, which would
+        # push the peak well above base even though they later drained.
+        assert peak <= base, (
+            f"helper threads were spawned: peak active_count {peak} > base {base}"
         )
+        # The bridging thread mechanism is gone entirely.
+        assert not _threads_named("wait_in_thread")
 
 
 # --------------------------------------------------------------------------- #
@@ -326,7 +340,7 @@ def test_cancel_completion_race_never_corrupts_result():
     must be either the value or a CancelledError - never a hang, an
     InvalidStateError, or a wrong value."""
     with Koil():
-        base = len(_threads_named("wait_in_thread"))
+        base = threading.active_count()
         for _ in range(60):
 
             async def coro() -> int:
@@ -340,10 +354,8 @@ def test_cancel_completion_race_never_corrupts_result():
             except concurrent.futures.CancelledError:
                 pass  # cancellation won the race - acceptable
 
-        # The cancel path must not leak watcher threads either.
-        assert _wait_until(
-            lambda: len(_threads_named("wait_in_thread")) <= base, timeout=10.0
-        )
+        # The cancel path must not spawn/leak threads either.
+        assert _wait_until(lambda: threading.active_count() <= base, timeout=10.0)
 
 
 @pytest.mark.timeout(15)
@@ -365,6 +377,51 @@ def test_koil_future_cancel_is_prompt():
             fut.result()
         elapsed = time.monotonic() - start
         assert elapsed < 5, f"cancellation took {elapsed:.2f}s (should be sub-second)"
+
+
+# --------------------------------------------------------------------------- #
+# nested cancellation: unkoil() inside a run_spawned worker
+# --------------------------------------------------------------------------- #
+@pytest.mark.timeout(15)
+async def test_nested_unkoil_in_run_spawned_cancels_promptly():
+    """unkoil() called from inside a run_spawned worker shares the worker's
+    cancel event. Cancelling the outer task must promptly cancel the inner
+    coroutine (it inherits and awaits the *same* thread-safe asyncio.Event), not
+    block until the inner would have finished on its own.
+
+    This is the path that would silently break if the spawn helpers kept a
+    plain (non-awaitable) threading.Event.
+    """
+    inner_started = threading.Event()
+
+    def sync_body() -> str:
+        async def inner() -> str:
+            inner_started.set()
+            await asyncio.sleep(30)  # only cancellation should end this
+            return "inner-done"
+
+        return unkoil(inner)
+
+    async def outer() -> str:
+        return await run_spawned(sync_body)
+
+    task = asyncio.create_task(outer())
+
+    # Wait until the nested inner coroutine is actually running.
+    await asyncio.get_running_loop().run_in_executor(None, inner_started.wait)
+    await asyncio.sleep(0.05)
+
+    start = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    elapsed = time.monotonic() - start
+    assert elapsed < 5, f"nested cancellation took {elapsed:.2f}s (should be prompt)"
+
+    # No bridging threads were used to achieve this. (We do not assert a flat
+    # active_count here: run_spawned uses run_in_executor, whose pool keeps idle
+    # worker threads alive by design - that is not a leak.)
+    assert not _threads_named("wait_in_thread")
 
 
 # --------------------------------------------------------------------------- #

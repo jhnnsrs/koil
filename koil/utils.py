@@ -1,7 +1,6 @@
 import asyncio
 import contextvars
 import concurrent.futures
-import threading
 from typing import (
     AsyncIterator,
     Awaitable,
@@ -14,7 +13,7 @@ from typing import (
 )
 from koil.errors import CancelledError, ThreadCancelledError
 from koil.types import AnyCallable
-from koil.vars import current_cancel_event
+from koil.vars import current_cancel_event, KoilThreadSafeEvent
 import inspect
 from koil.protocols import TaskSignalProtocol, IteratorSignalProtocol
 
@@ -51,46 +50,21 @@ def check_is_syncfunc(func: AnyCallable) -> bool:
     return False
 
 
-def _resolve_future_if_pending(fut: asyncio.Future[None]) -> None:
-    # Runs on the event loop thread, so this is race-free with the awaiter.
-    if not fut.done():
-        fut.set_result(None)
-
-
-def wait_in_thread(
-    event: threading.Event,
-    fut: asyncio.Future[None],
-    stop_event: threading.Event,
-    poll_interval: float = 0.1,
-) -> None:
-    # Poll instead of an unbounded `event.wait()` so that the helper thread can
-    # always be told to exit via `stop_event`. Without this, a normally
-    # completing coroutine (which never sets `event`) would leave this thread
-    # blocked forever, leaking one OS thread per call. See await_thread_event.
-    while not event.wait(timeout=poll_interval):
-        if stop_event.is_set():
-            return
-    fut.get_loop().call_soon_threadsafe(_resolve_future_if_pending, fut)
-
-
-async def await_thread_event(event: threading.Event):
-    loop = asyncio.get_running_loop()
-    fut = loop.create_future()
-    stop_event = threading.Event()
-    threading.Thread(
-        target=wait_in_thread, args=(event, fut, stop_event), daemon=True
-    ).start()
-    try:
-        await fut
-    finally:
-        # If we are cancelled (the common case: the coroutine finished first and
-        # the caller cancels this watcher), make sure the helper thread wakes up
-        # and exits instead of blocking forever.
-        stop_event.set()
-
-
 P = ParamSpec("P")
 T = TypeVar("T")
+
+
+def _safe_set_event(event: asyncio.Event) -> None:
+    """Set a (thread-safe) asyncio.Event, tolerating an already-closed loop.
+
+    ``KoilThreadSafeEvent.set`` routes through ``call_soon_threadsafe``, which
+    raises ``RuntimeError`` if the koil loop is already closed. If the loop is
+    gone the work is already finished/cancelled, so swallowing that is correct.
+    """
+    try:
+        event.set()
+    except RuntimeError:
+        pass
 
 
 class KoilFuture(Generic[T]):
@@ -104,15 +78,19 @@ class KoilFuture(Generic[T]):
     def __init__(
         self,
         future: concurrent.futures.Future[Tuple[T, contextvars.Context]],
-        cancel_event: threading.Event,
+        cancel_event: asyncio.Event,
     ):
         super().__init__()
         self.future = future
         self.cancel_event = cancel_event
+        self._cancel_requested = False
 
     def cancel(self) -> bool:
         if not self.future.done():
-            self.cancel_event.set()
+            # Record the request immediately so cancelled() is correct even
+            # though the asyncio.Event.set() is deferred onto the loop.
+            self._cancel_requested = True
+            _safe_set_event(self.cancel_event)
             return True
         return False
 
@@ -122,10 +100,7 @@ class KoilFuture(Generic[T]):
 
     def cancelled(self) -> bool:
         assert self.future, "Task was never run! Please run task before"
-        if self.cancel_event.is_set():
-            return True
-        else:
-            return False
+        return self._cancel_requested or self.cancel_event.is_set()
 
     def result(self) -> T:
         assert self.future, "Task was never run! Please run task before"
@@ -151,15 +126,17 @@ class KoilIterator(Generic[T]):
     def __init__(
         self,
         future: concurrent.futures.Future[Tuple[T, contextvars.Context]],
-        cancel_event: threading.Event,
+        cancel_event: asyncio.Event,
     ):
         super().__init__()
         self.future = future
         self.cancel_event = cancel_event
+        self._cancel_requested = False
 
     def cancel(self) -> bool:
         if not self.future.done():
-            self.cancel_event.set()
+            self._cancel_requested = True
+            _safe_set_event(self.cancel_event)
             return True
         return False
 
@@ -169,10 +146,7 @@ class KoilIterator(Generic[T]):
 
     def cancelled(self) -> bool:
         assert self.future, "Task was never run! Please run task before"
-        if self.cancel_event.is_set():
-            return True
-        else:
-            return False
+        return self._cancel_requested or self.cancel_event.is_set()
 
     def result(self) -> T:
         assert self.future, "Task was never run! Please run task before"
@@ -212,7 +186,7 @@ def run_async_sharing_context(
 
     ctxs = contextvars.copy_context()
 
-    cancel_event = current_cancel_event.get() or threading.Event()
+    cancel_event = current_cancel_event.get() or KoilThreadSafeEvent(loop)
 
     if cancel_event.is_set():
         raise ThreadCancelledError("Thread was cancelled")
@@ -227,7 +201,8 @@ def run_async_sharing_context(
             newcontext = contextvars.copy_context()
             return result, newcontext
 
-        cancel_f = asyncio.create_task(await_thread_event(cancel_event))
+        # Await the cancel event directly in the loop - no bridging thread.
+        cancel_f = asyncio.create_task(cancel_event.wait())
         future_t = asyncio.create_task(context_future())
 
         finished, unfinished = await asyncio.wait(
@@ -317,7 +292,7 @@ def iterate_async_sharing_context(
 
     ctxs = contextvars.copy_context()
 
-    cancel_event = current_cancel_event.get() or threading.Event()
+    cancel_event = current_cancel_event.get() or KoilThreadSafeEvent(loop)
 
     if cancel_event.is_set():
         raise ThreadCancelledError("Thread was cancelled")
@@ -335,7 +310,8 @@ def iterate_async_sharing_context(
             newcontext = contextvars.copy_context()
             return None, newcontext
 
-        cancel_f = asyncio.create_task(await_thread_event(cancel_event))
+        # Await the cancel event directly in the loop - no bridging thread.
+        cancel_f = asyncio.create_task(cancel_event.wait())
         future_t = asyncio.create_task(context_future())
 
         finished, unfinished = await asyncio.wait(

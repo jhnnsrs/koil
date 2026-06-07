@@ -15,6 +15,7 @@ from koil.vars import (
     current_cancel_event,
     global_koil,
     global_koil_loop,
+    KoilThreadSafeEvent,
 )
 import contextvars
 import logging
@@ -135,18 +136,6 @@ def unkoil(
     return context_aware_future.result()
 
 
-class KoilThreadSafeEvent(asyncio.Event):
-    def __init__(self, koil_loop: asyncio.AbstractEventLoop):
-        super().__init__()
-        self._loop = koil_loop
-
-    def set(self):
-        self._loop.call_soon_threadsafe(super().set)
-
-    def clear(self):
-        self._loop.call_soon_threadsafe(super().clear)
-
-
 TaskReturn = TypeVar("TaskReturn")
 TaskArgs = TypeVar("TaskArgs")
 TaskNext = TypeVar("TaskNext")
@@ -184,7 +173,7 @@ async def run_spawned(
     koil = global_koil.get()
 
     def wrapper(
-        cancel_event: threading.Event,
+        cancel_event: KoilThreadSafeEvent,
         context: contextvars.Context,
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
@@ -210,7 +199,10 @@ async def run_spawned(
         return context.run(body)
 
     context = contextvars.copy_context()
-    cancel_event = threading.Event()
+    # A thread-safe asyncio.Event so a nested unkoil() inside the worker can
+    # await this same event without a bridging thread. The worker checks it via
+    # is_set() (a plain bool read); we set() it from the loop on cancellation.
+    cancel_event = KoilThreadSafeEvent(loop)
 
     future = loop.run_in_executor(
         None,
@@ -255,10 +247,12 @@ async def iterate_spawned(
 
     yield_queue: janus.Queue[R] = janus.Queue()
     next_queue: janus.Queue[S] = janus.Queue()
-    cancel_event = threading.Event()
+    # Thread-safe asyncio.Event so a nested unkoil() inside the worker can await
+    # this same event without a bridging thread (see run_spawned).
+    cancel_event = KoilThreadSafeEvent(loop)
 
     def wrapper(
-        cancel_event: threading.Event,
+        cancel_event: KoilThreadSafeEvent,
         context: contextvars.Context,
         sync_yield_queue: janus.SyncQueue[R],
         sync_next_queue: janus.SyncQueue[S],
