@@ -27,6 +27,9 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
+      - name: Install Qt test dependencies
+        run: uv pip install pyqt5 pytest-qt
+
       - name: Run tests
         run: uv run pytest --cov --cov-branch --cov-report=xml
 
