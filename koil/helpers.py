@@ -4,13 +4,12 @@ import asyncio
 import threading
 import time
 
-import janus
 from koil.errors import (
     KoilError,
     KoilStopIteration,
     ThreadCancelledError,
 )
-from typing import AsyncGenerator, cast
+from typing import AsyncGenerator
 from koil.vars import (
     current_cancel_event,
     global_koil,
@@ -238,122 +237,52 @@ async def iterate_spawned(
     *sync_args: P.args,
     **sync_kwargs: P.kwargs,
 ) -> AsyncGenerator[R, S]:
+    """Drive a sync generator from async code by advancing it one step at a time.
+
+    Instead of running the whole generator on a dedicated worker thread and
+    pumping every value across a sync<->async queue, we resume the generator one
+    ``send()`` per :func:`run_spawned` call. Each step is a short thread hop, so
+    ``run_spawned`` already gives us context propagation, koil setup and
+    cooperative cancellation for free -- no queue (and no janus) needed.
+
+    Note: because each step is a fresh ``run_spawned`` call, consecutive steps
+    may land on different pooled threads and each runs in a fresh copy of the
+    *caller's* context. Generators that hold a thread-affine resource (e.g. an
+    ``RLock``) across a yield, or that mutate a ContextVar expecting it to
+    persist into the next yield, will not see the single-thread behaviour of a
+    classic threaded generator.
     """
-    Spawn a thread with a given sync function and arguments
-    """
 
-    loop = asyncio.get_running_loop()
-    koil = global_koil.get()
+    generator: Generator[R, S, None] | None = None
 
-    yield_queue: janus.Queue[R] = janus.Queue()
-    next_queue: janus.Queue[S] = janus.Queue()
-    # Thread-safe asyncio.Event so a nested unkoil() inside the worker can await
-    # this same event without a bridging thread (see run_spawned).
-    cancel_event = KoilThreadSafeEvent(loop)
+    def step(send_value: Any) -> R:
+        # Runs inside a run_spawned worker thread (koil context already set up).
+        # Create the generator lazily on the first step so any work done while
+        # building it happens in the thread, not on the loop.
+        nonlocal generator
+        if generator is None:
+            generator = sync_gen(*sync_args, **sync_kwargs)
+        try:
+            return generator.send(send_value)
+        except StopIteration:
+            # StopIteration interacts badly with futures, so wrap it and let
+            # the async side recognise the end of iteration.
+            raise KoilStopIteration("Generator exhausted")
 
-    def wrapper(
-        cancel_event: KoilThreadSafeEvent,
-        context: contextvars.Context,
-        sync_yield_queue: janus.SyncQueue[R],
-        sync_next_queue: janus.SyncQueue[S],
-        sync_args: Tuple[Any],
-        sync_kwargs: Dict[str, Any],
-    ) -> None:
-        # Run inside the copied context (see run_spawned) so the pooled executor
-        # thread's own context is left untouched and nothing leaks to the next
-        # task that lands on this thread.
-        def body() -> None:
-            # This needs to happen after the context is populated
-            global_koil.set(koil)
-            global_koil_loop.set(loop)
-            current_cancel_event.set(cancel_event)
+    send_value: Any = None
+    while True:
+        try:
+            value = await run_spawned(step, send_value)
+        except KoilStopIteration:
+            # Generator finished normally; it is already closed.
+            return
 
-            generator = cast(Generator[R, S, None], sync_gen(*sync_args, **sync_kwargs))  # type: ignore
-            it = generator.__iter__()
-
-            args = ()
-            while True:
-                try:
-                    res = it.__next__(*args if args else ())
-                    if cancel_event.is_set():
-                        raise ThreadCancelledError("Thread was cancelled")
-                    sync_yield_queue.put(res)
-                    args = sync_next_queue.get()
-                    sync_next_queue.task_done()
-                except StopIteration:
-                    raise KoilStopIteration("Thread stopped")
-                except Exception as e:
-                    logging.info("Exception in generator", exc_info=True)
-                    raise e
-
-        return context.run(body)
-
-    context = contextvars.copy_context()
-
-    iterator_future = loop.run_in_executor(
-        None,
-        wrapper,
-        cancel_event,
-        context,
-        yield_queue.sync_q,
-        next_queue.sync_q,
-        sync_args,
-        sync_kwargs,
-    )  # type: ignore
-
-    it_task: asyncio.Task[R] | None = None
-
-    try:
-        while True:
-            it_task = asyncio.create_task(yield_queue.async_q.get())
-
-            finish, _ = await asyncio.wait(
-                [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
-            )
-
-            finish_condition: BaseException | None = None
-
-            for task in finish:
-                if task == iterator_future:
-                    typed_task = cast(asyncio.Task[None], task)
-                    if task.exception():
-                        finish_condition = task.exception()
-
-                elif task == it_task:
-                    typed_task = cast(asyncio.Task[R], task)
-                    result = typed_task.result()
-                    if isinstance(result, KoilStopIteration):
-                        finish_condition = result
-                    else:
-                        yield_queue.async_q.task_done()
-                        args = yield result
-                        await next_queue.async_q.put(args)
-
-            if finish_condition:
-                yield_queue.close()
-                next_queue.close()
-                await next_queue.wait_closed()
-                await yield_queue.wait_closed()
-                try:
-                    raise finish_condition
-                except KoilStopIteration:
-                    break
-                except ThreadCancelledError:
-                    break
-    except asyncio.CancelledError as e:
-        cancel_event.set()
-
-        yield_queue.close()
-        next_queue.close()
-
-        await next_queue.wait_closed()
-        await yield_queue.wait_closed()
-
-        if not it_task:
-            await asyncio.wait_for(iterator_future, timeout=KOIL_CANCEL_TIMEOUT)
-        else:
-            finish, _ = await asyncio.wait(
-                [it_task, iterator_future], return_when=asyncio.FIRST_COMPLETED
-            )
-
-        raise e
+        try:
+            send_value = yield value
+        except GeneratorExit:
+            # Consumer stopped early (break / aclose): the generator is still
+            # suspended at a yield. Close it in a worker thread so its finally
+            # blocks run, then propagate the GeneratorExit.
+            if generator is not None:
+                await run_spawned(generator.close)
+            raise

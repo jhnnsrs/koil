@@ -8,7 +8,6 @@ readme = "README.md"
 license = "MIT"
 dependencies = [
     "pydantic>=2",
-    "janus>=1.0.0,<2",
 ]
 
 [project.optional-dependencies]
