@@ -189,21 +189,25 @@ async def run_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> R:
-        for ctx, value in context.items():
-            ctx.set(value)
+        # Run the body *inside* the copied context via Context.run instead of
+        # mutating the executor thread's own context with bare .set() calls.
+        # run_in_executor reuses pooled threads, so leftover contextvars would
+        # otherwise leak into the next, unrelated task scheduled on that thread.
+        def body() -> R:
+            # This needs to happen after the context is populated
+            global_koil.set(koil)
+            global_koil_loop.set(loop)
+            current_cancel_event.set(cancel_event)
 
-        # This needs to happend after the context is set
-        global_koil.set(koil)
-        global_koil_loop.set(loop)
-        current_cancel_event.set(cancel_event)
+            try:
+                return sync_func(*sync_args, **sync_kwargs)  # type: ignore
+            except StopIteration as e:
+                # We transform it so asyncio doesn't swallow it or crash
+                raise RuntimeError("Threaded function raised StopIteration") from e
+            except Exception as e:
+                raise e
 
-        try:
-            return sync_func(*sync_args, **sync_kwargs)  # type: ignore
-        except StopIteration as e:
-            # We transform it so asyncio doesn't swallow it or crash
-            raise RuntimeError("Threaded function raised StopIteration") from e
-        except Exception as e:
-            raise e
+        return context.run(body)
 
     context = contextvars.copy_context()
     cancel_event = threading.Event()
@@ -261,30 +265,34 @@ async def iterate_spawned(
         sync_args: Tuple[Any],
         sync_kwargs: Dict[str, Any],
     ) -> None:
-        for ctx, value in context.items():
-            ctx.set(value)
+        # Run inside the copied context (see run_spawned) so the pooled executor
+        # thread's own context is left untouched and nothing leaks to the next
+        # task that lands on this thread.
+        def body() -> None:
+            # This needs to happen after the context is populated
+            global_koil.set(koil)
+            global_koil_loop.set(loop)
+            current_cancel_event.set(cancel_event)
 
-        # This needs to happend after the context is set
-        global_koil_loop.set(loop)
-        current_cancel_event.set(cancel_event)
+            generator = cast(Generator[R, S, None], sync_gen(*sync_args, **sync_kwargs))  # type: ignore
+            it = generator.__iter__()
 
-        generator = cast(Generator[R, S, None], sync_gen(*sync_args, **sync_kwargs))  # type: ignore
-        it = generator.__iter__()
+            args = ()
+            while True:
+                try:
+                    res = it.__next__(*args if args else ())
+                    if cancel_event.is_set():
+                        raise ThreadCancelledError("Thread was cancelled")
+                    sync_yield_queue.put(res)
+                    args = sync_next_queue.get()
+                    sync_next_queue.task_done()
+                except StopIteration:
+                    raise KoilStopIteration("Thread stopped")
+                except Exception as e:
+                    logging.info("Exception in generator", exc_info=True)
+                    raise e
 
-        args = ()
-        while True:
-            try:
-                res = it.__next__(*args if args else ())
-                if cancel_event.is_set():
-                    raise ThreadCancelledError("Thread was cancelled")
-                sync_yield_queue.put(res)
-                args = sync_next_queue.get()
-                sync_next_queue.task_done()
-            except StopIteration:
-                raise KoilStopIteration("Thread stopped")
-            except Exception as e:
-                logging.info("Exception in generator", exc_info=True)
-                raise e
+        return context.run(body)
 
     context = contextvars.copy_context()
 

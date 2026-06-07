@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import contextmanager
 import os
 import sys
 import threading
@@ -7,7 +6,6 @@ from types import TracebackType
 from typing import Protocol, Self
 from koil.vars import global_koil, global_koil_loop
 from koil.errors import ContextError
-import time
 import logging
 
 try:
@@ -30,25 +28,28 @@ class KoilProtocol(Protocol):
     ) -> None: ...
 
 
-@contextmanager
-def _selector_policy(uvify: bool = True):
-    original_policy = asyncio.get_event_loop_policy()
+def _new_event_loop(uvify: bool = True) -> asyncio.AbstractEventLoop:
+    """Create a fresh event loop without touching the process-global policy.
 
-    try:
-        if uvify:
-            if uvloop:
-                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())  # type: ignore
-            else:
-                logger.info("uvloop not installed, using default policy")
-        elif (
-            sys.version_info >= (3, 8)
-            and os.name == "nt"
-            and hasattr(asyncio, "WindowsSelectorEventLoopPolicy")
-        ):
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        yield
-    finally:
-        asyncio.set_event_loop_policy(original_policy)
+    The previous implementation temporarily swapped ``asyncio``'s global event
+    loop policy via ``set_event_loop_policy`` and restored it afterwards. That
+    is process-global mutable state: two ``Koil`` instances entering
+    concurrently from different threads could observe each other's temporary
+    policy and restore the wrong one (or build a loop under the wrong policy).
+    Constructing the desired loop directly is race-free.
+    """
+    if uvify:
+        if uvloop:
+            return uvloop.new_event_loop()  # type: ignore[no-any-return]
+        logger.info("uvloop not installed, using default policy")
+        return asyncio.new_event_loop()
+    elif (
+        sys.version_info >= (3, 8)
+        and os.name == "nt"
+        and hasattr(asyncio, "SelectorEventLoop")
+    ):
+        return asyncio.SelectorEventLoop()
+    return asyncio.new_event_loop()
 
 
 def run_threaded_event_loop(loop: asyncio.BaseEventLoop):
@@ -85,10 +86,15 @@ def run_threaded_event_loop(loop: asyncio.BaseEventLoop):
             loop.close()
 
 
-def get_threaded_loop(name: str = "KoilLoop", uvify: bool = True):
-    """Creates a new event loop and run it in a new threads"""
-    with _selector_policy(uvify=uvify):
-        newloop = asyncio.new_event_loop()
+def get_threaded_loop(
+    name: str = "KoilLoop", uvify: bool = True
+) -> tuple[asyncio.AbstractEventLoop, threading.Thread]:
+    """Creates a new event loop and runs it in a new thread.
+
+    Returns both the loop and the thread so the thread can be joined on
+    shutdown (see Koil.__exit__).
+    """
+    newloop = _new_event_loop(uvify=uvify)
 
     th = threading.Thread(target=run_threaded_event_loop, args=(newloop,), name=name)
 
@@ -97,7 +103,7 @@ def get_threaded_loop(name: str = "KoilLoop", uvify: bool = True):
     th.daemon = True
     th.start()
 
-    return newloop
+    return newloop, th
 
 
 class Koil:
@@ -107,6 +113,7 @@ class Koil:
         uvify: bool = True,
     ):
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
         self.running = False
         self.sync_in_async = sync_in_async
         self.cancel_timeout = 2.0
@@ -161,7 +168,7 @@ class Koil:
 
         if koil is None:
             # We are not in a koiled loop, so we need to create one
-            self._loop = get_threaded_loop(
+            self._loop, self._loop_thread = get_threaded_loop(
                 getattr(
                     self,
                     "name",
@@ -184,16 +191,26 @@ class Koil:
             # If we started the loop, we need to stop it
             self._loop.call_soon_threadsafe(self._loop.stop)
 
-            iterations = 0
-
-            while self._loop.is_running():
-                time.sleep(0.001)
-                iterations += 1
-                if iterations == 100:
+            if self._loop_thread is not None:
+                # Join the loop thread instead of busy-polling `is_running()`.
+                # `is_running()` flips False/True/False during the loop's
+                # shutdown sequence (cancel tasks -> gather -> close), so polling
+                # it can return before the loop is actually closed. Joining the
+                # thread guarantees we only return once `loop.close()` has run.
+                self._loop_thread.join(timeout=self.cancel_timeout)
+                if self._loop_thread.is_alive():
                     logger.warning(
-                        "Shutting Down takes longer than expected. Probably we are having loose Threads? Keyboard interrupt?"
+                        "Shutting Down takes longer than expected. Probably we are "
+                        "having loose Threads or a blocked task? Keyboard interrupt?"
                     )
+                    # The thread is a daemon, so we wait for a clean close rather
+                    # than busy-spinning, but never block the interpreter forever.
+                    self._loop_thread.join()
+                self._loop_thread = None
 
+            # Drop the reference so a second __exit__ doesn't call
+            # call_soon_threadsafe(stop) on an already-closed loop.
+            self._loop = None
             global_koil.set(None)
             global_koil_loop.set(None)
 

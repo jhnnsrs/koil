@@ -51,17 +51,42 @@ def check_is_syncfunc(func: AnyCallable) -> bool:
     return False
 
 
-def wait_in_thread(event: threading.Event, fut: asyncio.Future[None]):
-    event.wait()
-    if not fut.cancelled():
-        fut.get_loop().call_soon_threadsafe(fut.set_result, None)
+def _resolve_future_if_pending(fut: asyncio.Future[None]) -> None:
+    # Runs on the event loop thread, so this is race-free with the awaiter.
+    if not fut.done():
+        fut.set_result(None)
+
+
+def wait_in_thread(
+    event: threading.Event,
+    fut: asyncio.Future[None],
+    stop_event: threading.Event,
+    poll_interval: float = 0.1,
+) -> None:
+    # Poll instead of an unbounded `event.wait()` so that the helper thread can
+    # always be told to exit via `stop_event`. Without this, a normally
+    # completing coroutine (which never sets `event`) would leave this thread
+    # blocked forever, leaking one OS thread per call. See await_thread_event.
+    while not event.wait(timeout=poll_interval):
+        if stop_event.is_set():
+            return
+    fut.get_loop().call_soon_threadsafe(_resolve_future_if_pending, fut)
 
 
 async def await_thread_event(event: threading.Event):
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
-    threading.Thread(target=wait_in_thread, args=(event, fut), daemon=True).start()
-    await fut
+    stop_event = threading.Event()
+    threading.Thread(
+        target=wait_in_thread, args=(event, fut, stop_event), daemon=True
+    ).start()
+    try:
+        await fut
+    finally:
+        # If we are cancelled (the common case: the coroutine finished first and
+        # the caller cancels this watcher), make sure the helper thread wakes up
+        # and exits instead of blocking forever.
+        stop_event.set()
 
 
 P = ParamSpec("P")

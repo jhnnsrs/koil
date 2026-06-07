@@ -62,6 +62,7 @@ class SleepWorker(KoiledModel):
         sleep(10)  # should raise ThreadCancelledError on the first cancel check
 
 
+@pytest.mark.timeout(10)
 async def test_run_spawned_cooperative_cancel():
     """Cancelling a task wrapping run_spawned completes cleanly when the thread checks check_cancelled."""
     async with CoopWorker() as w:
@@ -72,6 +73,7 @@ async def test_run_spawned_cooperative_cancel():
             await task
 
 
+@pytest.mark.timeout(10)
 async def test_iterate_spawned_cooperative_cancel():
     """Cancelling a task wrapping iterate_spawned completes cleanly when the generator checks check_cancelled."""
 
@@ -87,6 +89,7 @@ async def test_iterate_spawned_cooperative_cancel():
             await task
 
 
+@pytest.mark.timeout(10)
 async def test_sleep_raises_thread_cancelled_error_on_cancel():
     """koil.helpers.sleep raises ThreadCancelledError when the thread's cancel event is already set."""
     async with SleepWorker() as w:
@@ -94,6 +97,7 @@ async def test_sleep_raises_thread_cancelled_error_on_cancel():
             await w.do_sleep()
 
 
+@pytest.mark.timeout(10)
 async def test_run_spawned_cancel_timeout():
     """A non-cooperative thread causes KoilError after cancel_timeout expires."""
     blocker = threading.Event()
