@@ -1,9 +1,14 @@
 import asyncio
 from typing import Tuple
-from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtFuture, QtGenerator, create_qt_koil
 import contextvars
 import pytest
+
+# Skip the entire module unless PyQt5 (and pytest-qt) are installed.
+pytest.importorskip("PyQt5")
+pytest.importorskip("pytestqt")
+
+from PyQt5 import QtWidgets, QtCore
+from koil.qt import QtFuture, QtGenerator, create_qt_koil
 from koil.qt import (
     async_gen_to_qt,
     async_to_qt,

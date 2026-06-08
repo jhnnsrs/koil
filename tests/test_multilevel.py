@@ -1,7 +1,7 @@
 import asyncio
 from koil.composition.base import KoiledModel
 from koil import Koil
-from koil.helpers import unkoil
+from koil.bridge import unkoil
 import pytest
 
 

@@ -2,7 +2,7 @@ from types import TracebackType
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 from koil.decorators import koilable
 from typing import Optional, Self, TypeVar
-from koil.koil import Koil
+from koil.loop import Koil
 
 T = TypeVar("T")
 

@@ -15,11 +15,11 @@ from typing import (
     Awaitable,
     Concatenate,
 )
-from koil.helpers import get_koiled_loop_or_raise
+from koil.bridge import get_koiled_loop_or_raise
 from koil.protocols import SignalProtocol
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
-from koil.koil import Koil
+from koil.loop import Koil
 from koil.utils import (
     run_async_sharing_context,
     iterate_async_sharing_context,
@@ -35,6 +35,29 @@ Reference = str
 
 
 T = TypeVar("T")
+
+
+def _set_future_result(fut: "asyncio.Future[Any]", result: Any) -> None:
+    """Set a future's result, guarding against an already-resolved future.
+
+    Must be scheduled onto the future's loop (via call_soon_threadsafe) so that
+    the ``done()`` check and the ``set_result`` happen atomically relative to
+    other loop callbacks. Doing the check on the calling thread (as before) is a
+    check-then-act race: two callers both observe ``not done()`` and both
+    schedule a set, and the second raises ``InvalidStateError`` on the loop.
+    """
+    if fut.done():
+        logger.warning(f"Future {fut} already done. Ignoring result.")
+        return
+    fut.set_result(result)
+
+
+def _set_future_exception(fut: "asyncio.Future[Any]", exc: BaseException) -> None:
+    """Set a future's exception, guarding against an already-resolved future."""
+    if fut.done():
+        logger.warning(f"Future {fut} already done. Ignoring exception.")
+        return
+    fut.set_exception(exc)
 
 
 # Your dynamic signal bundle
@@ -104,21 +127,16 @@ class QtFuture(QtCore.QObject, Generic[T]):
     def resolve(self, returns: T):
         ctx = contextvars.copy_context()
         self.resolved = True
-
-        if self.aiofuture.done():
-            logger.warning(f"QtFuture {self} already done. Cannot resolve")
-            return
-
-        self.loop.call_soon_threadsafe(self.aiofuture.set_result, (ctx, returns))
+        # The done-check is performed on the loop thread inside the callback so
+        # it is race-free with any concurrent resolve()/reject() (see
+        # _set_future_result).
+        self.loop.call_soon_threadsafe(
+            _set_future_result, self.aiofuture, (ctx, returns)
+        )
 
     def reject(self, exp: Exception):
-        if self.aiofuture.done():
-            logger.warning(f"QtFuture {self} already done. Could not reject")
-            return
-
         self.rejected = True
-
-        self.loop.call_soon_threadsafe(self.aiofuture.set_exception, exp)
+        self.loop.call_soon_threadsafe(_set_future_exception, self.aiofuture, exp)
 
 
 class QtStopIteration(Exception):

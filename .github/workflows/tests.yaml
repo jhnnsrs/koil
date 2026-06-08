@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -29,4 +29,32 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run tests
-        run: uv run pytest -k "not integration"
+        run: uv run pytest -k "not integration and not qt"
+  test_qt:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+          python-version: ${{ matrix.python-version }}
+
+      - uses: pyvista/setup-headless-display-action@v3
+        with:
+          qt: true
+
+      - name: Install the project
+        run: uv sync --all-extras --dev
+
+      - name: Install Qt test dependencies
+        run: uv pip install pyqt5 pytest-qt
+
+      - name: Run qt tests
+        run: uv run pytest -k "qt"
