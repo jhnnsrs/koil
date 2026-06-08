@@ -4,9 +4,9 @@ from typing import AsyncGenerator
 
 from koil import unkoil, koilable
 from koil.composition.base import KoiledModel
-from koil.helpers import iterate_spawned, run_spawned, unkoil_gen, unkoil_task
-from koil.koil import Koil
-from koil.vars import check_cancelled
+from koil.bridge import iterate_threaded, run_threaded, unkoil_gen, unkoil_task
+from koil.loop import Koil
+from koil.context import check_cancelled
 import time
 
 
@@ -49,11 +49,11 @@ class X(KoiledModel):
         return a + "iterator"
 
     async def t(self):
-        f = await run_spawned(self.sleep_and_call, "haha")
+        f = await run_threaded(self.sleep_and_call, "haha")
         return "x" + f
 
     async def g(self) -> AsyncGenerator[str, None]:
-        async for elem in iterate_spawned(self.sleep_and_yield, "haha"):
+        async for elem in iterate_threaded(self.sleep_and_yield, "haha"):
             yield elem + "33"
 
     async def __aenter__(self):

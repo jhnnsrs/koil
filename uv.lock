@@ -333,15 +333,6 @@ wheels = [
 ]
 
 [[package]]
-name = "janus"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d8/1f/5100f13bc13e24a041f60757b097b3c7c31cf8a08c1c1ef1f1caa2516f22/janus-1.2.0.tar.gz", hash = "sha256:c03475c3e10e042f2a08d31a7a894df2a2a95845ff794b7265e7e9c10a425e5d", size = 21534, upload-time = "2024-12-12T23:59:54.797Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/d6/6b3ac4df8d0e928521fe7d49cff8f3274b5012975ec0bdbb968ae50531aa/janus-1.2.0-py3-none-any.whl", hash = "sha256:3fa91456c00caed4905821a911e95c69d41306e463ea8da72c76c7a096abc698", size = 11674, upload-time = "2024-12-12T23:59:52.327Z" },
-]
-
-[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -358,7 +349,6 @@ name = "koil"
 version = "2.5.3"
 source = { editable = "." }
 dependencies = [
-    { name = "janus" },
     { name = "pydantic" },
 ]
 
@@ -382,7 +372,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "janus", specifier = ">=1.0.0,<2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "qtpy", marker = "extra == 'qtpy'", specifier = ">1" },
 ]

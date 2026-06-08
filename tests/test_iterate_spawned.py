@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from koil.helpers import iterate_spawned
+from koil.bridge import iterate_threaded
 from .context import AsyncContextManager
 from koil import Koil
 import time
@@ -21,7 +21,7 @@ def iterating():
 
 async def test_iterating():
     async with Koil():
-        t = iterate_spawned(iterating)
+        t = iterate_threaded(iterating)
         assert await anext(t) == 1
         assert await anext(t) == 2
         assert await anext(t) == 3
@@ -42,7 +42,7 @@ def echoing():
 async def test_iterate_spawned_send():
     """Values sent into the async generator are delivered into the sync generator."""
     async with Koil():
-        agen = iterate_spawned(echoing)
+        agen = iterate_threaded(echoing)
         assert await agen.asend(None) == 1
         assert await agen.asend(10) == 11
         assert await agen.asend(20) == 21
@@ -62,7 +62,7 @@ async def test_iterate_spawned_closes_generator_on_early_exit():
             cleaned.append(True)
 
     async with Koil():
-        agen = iterate_spawned(gen)
+        agen = iterate_threaded(gen)
         assert await anext(agen) == 1
         await agen.aclose()
 

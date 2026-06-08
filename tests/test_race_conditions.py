@@ -6,7 +6,7 @@ timing bugs:
 * the per-call helper-thread leak in the cancel bridge (``await_thread_event``),
 * the shutdown race in ``Koil.__exit__`` (returning before the loop is closed),
 * the process-global event-loop-policy race during concurrent ``Koil`` entry,
-* contextvar leakage into pooled executor threads (``run_spawned``),
+* contextvar leakage into pooled executor threads (``run_threaded``),
 * check-then-act races when cancelling / completing a ``KoilFuture``.
 
 They are intentionally light on assertions about *internal* timing and instead
@@ -22,9 +22,9 @@ from typing import Callable
 
 import pytest
 
-from koil.helpers import run_spawned, unkoil, unkoil_gen, unkoil_task
-from koil.koil import Koil, get_threaded_loop
-from koil.vars import current_cancel_event, global_koil_loop
+from koil.bridge import run_threaded, unkoil, unkoil_gen, unkoil_task
+from koil.loop import Koil, get_threaded_loop
+from koil.context import current_cancel_event, global_koil_loop
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +184,7 @@ def test_get_threaded_loop_never_mutates_global_policy(monkeypatch):
     pre-fix implementation set+restored the policy here (2 calls); the fixed
     implementation must make zero policy mutations.
     """
-    import koil.koil as koil_mod
+    import koil.loop as koil_mod
 
     class _FakeUvloop:
         EventLoopPolicy = asyncio.DefaultEventLoopPolicy
@@ -219,7 +219,7 @@ def test_get_threaded_loop_never_mutates_global_policy(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# A4 - run_spawned must not leak contextvars into pooled executor threads
+# A4 - run_threaded must not leak contextvars into pooled executor threads
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(15)
 async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
@@ -238,7 +238,7 @@ async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
         assert current_cancel_event.get() is not None
         return threading.get_ident()
 
-    ident_inside = await run_spawned(koiled_body)
+    ident_inside = await run_threaded(koiled_body)
 
     def probe():
         # ...but a plain executor job on the *same* worker thread must see a
@@ -258,7 +258,7 @@ async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
 
 @pytest.mark.timeout(15)
 async def test_concurrent_run_spawned_have_isolated_cancel_events():
-    """Concurrency smoke test: many run_spawned tasks each see their own cancel
+    """Concurrency smoke test: many run_threaded tasks each see their own cancel
     event - one task setting its event must not be observed by another. (Holds
     with or without the A4 fix, since each wrapper installs its own event; this
     guards against future regressions in cancel-event scoping.)"""
@@ -279,11 +279,11 @@ async def test_concurrent_run_spawned_have_isolated_cancel_events():
         return self_cancel
 
     results = await asyncio.gather(
-        run_spawned(body, True),
-        run_spawned(body, False),
-        run_spawned(body, False),
-        run_spawned(body, False),
-        run_spawned(body, False),
+        run_threaded(body, True),
+        run_threaded(body, False),
+        run_threaded(body, False),
+        run_threaded(body, False),
+        run_threaded(body, False),
     )
     assert results == [True, False, False, False, False]
     # Exactly one task set its event; nobody else should have observed a set.
@@ -380,11 +380,11 @@ def test_koil_future_cancel_is_prompt():
 
 
 # --------------------------------------------------------------------------- #
-# nested cancellation: unkoil() inside a run_spawned worker
+# nested cancellation: unkoil() inside a run_threaded worker
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(15)
 async def test_nested_unkoil_in_run_spawned_cancels_promptly():
-    """unkoil() called from inside a run_spawned worker shares the worker's
+    """unkoil() called from inside a run_threaded worker shares the worker's
     cancel event. Cancelling the outer task must promptly cancel the inner
     coroutine (it inherits and awaits the *same* thread-safe asyncio.Event), not
     block until the inner would have finished on its own.
@@ -403,7 +403,7 @@ async def test_nested_unkoil_in_run_spawned_cancels_promptly():
         return unkoil(inner)
 
     async def outer() -> str:
-        return await run_spawned(sync_body)
+        return await run_threaded(sync_body)
 
     task = asyncio.create_task(outer())
 
@@ -419,7 +419,7 @@ async def test_nested_unkoil_in_run_spawned_cancels_promptly():
     assert elapsed < 5, f"nested cancellation took {elapsed:.2f}s (should be prompt)"
 
     # No bridging threads were used to achieve this. (We do not assert a flat
-    # active_count here: run_spawned uses run_in_executor, whose pool keeps idle
+    # active_count here: run_threaded uses run_in_executor, whose pool keeps idle
     # worker threads alive by design - that is not a leak.)
     assert not _threads_named("wait_in_thread")
 

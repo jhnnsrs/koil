@@ -4,7 +4,7 @@ import contextvars
 import pytest
 
 from koil.composition.base import KoiledModel
-from koil.helpers import iterate_spawned, run_spawned
+from koil.bridge import iterate_threaded, run_threaded
 
 
 request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -25,7 +25,7 @@ class SpawnModel(KoiledModel):
         pass
 
     async def read_var_in_thread(self) -> str:
-        return await run_spawned(self._read)
+        return await run_threaded(self._read)
 
     def _read(self) -> str:
         return request_id.get()
@@ -39,7 +39,7 @@ class GenModel(KoiledModel):
         pass
 
     async def yield_var_values(self, n: int):
-        async for val in iterate_spawned(self._gen, n):
+        async for val in iterate_threaded(self._gen, n):
             yield val
 
     def _gen(self, n: int):
@@ -53,7 +53,7 @@ class GenModel(KoiledModel):
 
 
 async def test_context_var_propagates_into_run_spawned():
-    """A ContextVar set before run_spawned is visible inside the spawned thread."""
+    """A ContextVar set before run_threaded is visible inside the spawned thread."""
     token = request_id.set("req-123")
     try:
         async with SpawnModel() as m:
@@ -71,7 +71,7 @@ async def test_context_var_default_visible_in_run_spawned():
 
 
 async def test_context_var_propagates_into_iterate_spawned():
-    """A ContextVar set before iterate_spawned is visible for every yielded value."""
+    """A ContextVar set before iterate_threaded is visible for every yielded value."""
     token = request_id.set("req-456")
     try:
         async with GenModel() as m:

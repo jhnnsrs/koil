@@ -2,8 +2,8 @@ from koil.composition import Composition
 import asyncio
 from pydantic import Field
 from koil.composition.base import KoiledModel
-from koil.koil import Koil
-from koil.helpers import unkoil
+from koil.loop import Koil
+from koil.bridge import unkoil
 
 
 class Kant(KoiledModel):

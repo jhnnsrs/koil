@@ -1,7 +1,7 @@
 from types import TracebackType
-from koil.helpers import unkoil
-from koil.koil import Koil, KoilProtocol
-from koil.vars import global_koil
+from koil.bridge import unkoil
+from koil.loop import Koil, KoilProtocol
+from koil.context import global_koil
 import inspect
 from typing import Callable, Self, Type, TypeVar
 

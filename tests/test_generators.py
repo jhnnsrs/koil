@@ -4,8 +4,8 @@ import threading
 
 import pytest
 
-from koil.helpers import KoilThreadSafeEvent, unkoil_gen
-from koil.koil import Koil
+from koil.bridge import KoilThreadSafeEvent, unkoil_gen
+from koil.loop import Koil
 
 
 # ---------------------------------------------------------------------------

@@ -15,11 +15,11 @@ from typing import (
     Awaitable,
     Concatenate,
 )
-from koil.helpers import get_koiled_loop_or_raise
+from koil.bridge import get_koiled_loop_or_raise
 from koil.protocols import SignalProtocol
 from qtpy import QtCore, QtWidgets
 from typing_extensions import ParamSpec
-from koil.koil import Koil
+from koil.loop import Koil
 from koil.utils import (
     run_async_sharing_context,
     iterate_async_sharing_context,

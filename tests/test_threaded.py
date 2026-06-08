@@ -1,5 +1,5 @@
 import asyncio
-from koil.helpers import unkoil, unkoil_gen
+from koil.bridge import unkoil, unkoil_gen
 from .context import AsyncContextManager
 from koil import Koil
 

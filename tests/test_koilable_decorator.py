@@ -3,9 +3,9 @@ import inspect
 import pytest
 
 from koil.decorators import koilable
-from koil.helpers import unkoil
-from koil.koil import Koil
-from koil.vars import global_koil
+from koil.bridge import unkoil
+from koil.loop import Koil
+from koil.context import global_koil
 
 
 # ---------------------------------------------------------------------------

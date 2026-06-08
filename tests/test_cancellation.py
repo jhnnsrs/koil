@@ -5,9 +5,9 @@ import pytest
 
 from koil.composition.base import KoiledModel
 from koil.errors import KoilError, ThreadCancelledError
-from koil.helpers import iterate_spawned, run_spawned, sleep
-from koil.koil import Koil
-from koil.vars import check_cancelled, current_cancel_event, global_koil
+from koil.bridge import iterate_threaded, run_threaded, sleep
+from koil.loop import Koil
+from koil.context import check_cancelled, current_cancel_event, global_koil
 
 
 class CoopWorker(KoiledModel):
@@ -18,7 +18,7 @@ class CoopWorker(KoiledModel):
         pass
 
     async def run_blocking(self):
-        return await run_spawned(self._work)
+        return await run_threaded(self._work)
 
     def _work(self):
         for _ in range(100):
@@ -35,7 +35,7 @@ class GenWorker(KoiledModel):
         pass
 
     async def stream(self):
-        async for val in iterate_spawned(self._gen):
+        async for val in iterate_threaded(self._gen):
             yield val
 
     def _gen(self):
@@ -53,7 +53,7 @@ class SleepWorker(KoiledModel):
         pass
 
     async def do_sleep(self):
-        return await run_spawned(self._set_cancel_then_sleep)
+        return await run_threaded(self._set_cancel_then_sleep)
 
     def _set_cancel_then_sleep(self):
         # Simulate an external cancellation signal arriving mid-sleep
@@ -64,7 +64,7 @@ class SleepWorker(KoiledModel):
 
 @pytest.mark.timeout(10)
 async def test_run_spawned_cooperative_cancel():
-    """Cancelling a task wrapping run_spawned completes cleanly when the thread checks check_cancelled."""
+    """Cancelling a task wrapping run_threaded completes cleanly when the thread checks check_cancelled."""
     async with CoopWorker() as w:
         task = asyncio.create_task(w.run_blocking())
         await asyncio.sleep(0.02)
@@ -75,7 +75,7 @@ async def test_run_spawned_cooperative_cancel():
 
 @pytest.mark.timeout(10)
 async def test_iterate_spawned_cooperative_cancel():
-    """Cancelling a task wrapping iterate_spawned completes cleanly when the generator checks check_cancelled."""
+    """Cancelling a task wrapping iterate_threaded completes cleanly when the generator checks check_cancelled."""
 
     async def consume(w: GenWorker):
         async for _ in w.stream():
@@ -91,7 +91,7 @@ async def test_iterate_spawned_cooperative_cancel():
 
 @pytest.mark.timeout(10)
 async def test_sleep_raises_thread_cancelled_error_on_cancel():
-    """koil.helpers.sleep raises ThreadCancelledError when the thread's cancel event is already set."""
+    """koil.bridge.sleep raises ThreadCancelledError when the thread's cancel event is already set."""
     async with SleepWorker() as w:
         with pytest.raises(ThreadCancelledError):
             await w.do_sleep()
@@ -107,7 +107,7 @@ async def test_run_spawned_cancel_timeout():
     token = global_koil.set(k)
 
     try:
-        task = asyncio.create_task(run_spawned(blocker.wait))
+        task = asyncio.create_task(run_threaded(blocker.wait))
         await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises((KoilError, asyncio.CancelledError)):
