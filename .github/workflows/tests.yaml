@@ -6,11 +6,20 @@ on:
     branches: [main]
 jobs:
   test_suit:
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [windows-latest, ubuntu-latest]
+        experimental: [false]
+        include:
+          - python-version: "3.14t"
+            os: ubuntu-latest
+            experimental: true
+          - python-version: "3.14t"
+            os: windows-latest
+            experimental: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,11 +40,17 @@ jobs:
       - name: Run tests
         run: uv run pytest -k "not integration and not qt"
   test_qt:
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest]
+        experimental: [false]
+        include:
+          - python-version: "3.14t"
+            os: ubuntu-latest
+            experimental: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
