@@ -15,6 +15,7 @@ the background asyncio event loop managed by :class:`~koil.loop.Koil`:
   respects cancellation.
 """
 import asyncio
+import concurrent.futures
 import threading
 import time
 
@@ -33,7 +34,11 @@ from koil.context import (
 import contextvars
 import logging
 from typing import Callable, Dict, Tuple, TypeVar
-from koil.utils import run_async_sharing_context, KoilFuture
+from koil.utils import (
+    run_async_sharing_context,
+    aclose_async_gen_threadsafe,
+    KoilFuture,
+)
 from typing import ParamSpec
 
 
@@ -168,18 +173,31 @@ def unkoil_gen(
 
     ait = iterator(*args, **kwargs).__aiter__()
 
-    future = run_async_sharing_context(ait.__anext__, koil_loop, None)
-    send_val = yield future.result()
-    while True:
-        if send_val is None:
-            future = run_async_sharing_context(ait.__anext__, koil_loop, None)
-        else:
-            future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)  # type: ignore
+    future: KoilFuture[R] | None = None
+    try:
+        future = run_async_sharing_context(ait.__anext__, koil_loop, None)
+        send_val = yield future.result()
+        while True:
+            if send_val is None:
+                future = run_async_sharing_context(ait.__anext__, koil_loop, None)
+            else:
+                future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)  # type: ignore
 
-        try:
-            send_val = yield future.result()
-        except StopAsyncIteration:
-            break
+            try:
+                send_val = yield future.result()
+            except StopAsyncIteration:
+                break
+    finally:
+        # Close the underlying async generator on the loop so its finally
+        # blocks run now, not whenever it is garbage-collected or the loop is
+        # torn down. On an interrupt/early-exit the last step's future was
+        # cancelled by result(); let it settle first so we don't aclose() a
+        # generator whose __anext__ is still unwinding (which would raise
+        # "aclose(): asynchronous generator is already running").
+        if future is not None and not future.future.done():
+            future.cancel(reason="generator closed")
+            concurrent.futures.wait([future.future], timeout=KOIL_CANCEL_TIMEOUT)
+        aclose_async_gen_threadsafe(ait, koil_loop)
 
 
 def unkoil(

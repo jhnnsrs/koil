@@ -83,6 +83,90 @@ T = TypeVar("T")
 RESULT_POLL_INTERVAL: float = 0.05
 
 
+#: Bounded time, in seconds, that :func:`aclose_async_gen_threadsafe` waits for a
+#: generator's :meth:`~agen.aclose` to finish running on the koil loop before
+#: giving up. Teardown should be prompt; an aclose that takes longer than this
+#: is almost certainly wedged on uncancellable work, and blocking forever would
+#: defeat the point of a cooperative close.
+ACLOSE_TIMEOUT: float = 5.0
+
+
+def aclose_async_gen_threadsafe(
+    agen: object,
+    loop: asyncio.AbstractEventLoop,
+    timeout: float | None = None,
+) -> None:
+    """Close an async generator on *loop* from another thread, tolerating races.
+
+    Drives ``agen.aclose()`` on the koil loop so the generator's ``finally``
+    blocks run promptly and deterministically — instead of being deferred to
+    garbage collection or :meth:`asyncio.AbstractEventLoop.shutdown_asyncgens`
+    at loop close.
+
+    The tricky case this guards is a *concurrent* teardown: if the generator's
+    ``__anext__`` is still unwinding from a cancellation when we call
+    ``aclose()``, CPython raises ``RuntimeError("aclose(): asynchronous
+    generator is already running")`` — two teardown paths cannot drive one
+    generator frame at once. When that happens the *other* path is already
+    closing the generator (its ``finally`` will still run exactly once), so the
+    error is benign and is swallowed here.
+
+    Safe to call on a non-generator (no ``aclose`` -> no-op) and on an
+    already-closed loop (the work is necessarily finished, so the close is a
+    no-op).
+
+    Args:
+        agen: An async generator (or async iterator). Anything without an
+            ``aclose`` attribute is ignored.
+        loop: The koil loop the generator lives on.
+        timeout: Seconds to wait for the close to complete. Defaults to
+            :data:`ACLOSE_TIMEOUT`.
+    """
+    aclose = getattr(agen, "aclose", None)
+    if aclose is None:
+        return
+    if loop.is_closed():
+        return
+
+    # If we are *on* the target loop (e.g. this runs from a loop callback
+    # because the generator was finalized there), we must not block on
+    # run_coroutine_threadsafe(...).result() — the loop can't run the close
+    # while it's blocked waiting on it. Schedule a fire-and-forget close
+    # instead; its finally still runs on the next loop iteration.
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is loop:
+        loop.create_task(aclose())
+        return
+
+    try:
+        close_future = asyncio.run_coroutine_threadsafe(aclose(), loop)
+    except RuntimeError:
+        # Loop stopped/closed between the is_closed() check and submission;
+        # nothing left to close.
+        return
+
+    try:
+        close_future.result(timeout=ACLOSE_TIMEOUT if timeout is None else timeout)
+    except RuntimeError:
+        # "aclose(): asynchronous generator is already running" — another
+        # teardown path (a cancelled __anext__ unwinding, or the loop's
+        # shutdown_asyncgens) is already closing this generator. Its finally
+        # still runs exactly once; nothing to do here.
+        pass
+    except (CancelledError, concurrent.futures.CancelledError):
+        pass
+    except concurrent.futures.TimeoutError:
+        logger.warning(
+            "Timed out after %.1fs closing async generator %r on the koil loop; "
+            "it may be wedged on uncancellable work.",
+            ACLOSE_TIMEOUT if timeout is None else timeout,
+            agen,
+        )
+
+
 def _safe_set_event(event: asyncio.Event) -> None:
     """Set *event*, tolerating a closed event loop.
 
@@ -265,9 +349,26 @@ def run_async_sharing_context(
 
     ctxs = contextvars.copy_context()
 
-    cancel_event = current_cancel_event.get() or KoilThreadSafeEvent(loop)
+    # Two distinct cancel events, deliberately *not* the same object:
+    #
+    # * ``own_cancel_event`` is private to this single future. It is what
+    #   :meth:`KoilFuture.cancel` (and the Ctrl+C path in
+    #   :meth:`KoilFuture.result`) sets, so cancelling *this* future cancels
+    #   only this future.
+    # * ``ambient_cancel_event`` is the scope-wide event injected by
+    #   :func:`~koil.bridge.run_threaded` into ``current_cancel_event``. We race
+    #   against it (read-only) so that tearing down the enclosing worker still
+    #   cancels nested work — but we never *set* it here.
+    #
+    # Previously both roles were collapsed onto a single shared event stored on
+    # the future. Cancelling one future (or a Ctrl+C consumed by ``result()``)
+    # then set the ambient event, poisoning every later ``unkoil()`` that shared
+    # it (e.g. a context-manager teardown after the interrupt) with a spurious
+    # ``ThreadCancelledError``.
+    ambient_cancel_event = current_cancel_event.get()
+    own_cancel_event = KoilThreadSafeEvent(loop)
 
-    if cancel_event.is_set():
+    if ambient_cancel_event is not None and ambient_cancel_event.is_set():
         raise ThreadCancelledError("Thread was cancelled")
 
     async def passed_with_context():
@@ -280,68 +381,54 @@ def run_async_sharing_context(
             newcontext = contextvars.copy_context()
             return result, newcontext
 
-        cancel_f = asyncio.create_task(cancel_event.wait())
         future_t = asyncio.create_task(context_future())
+        cancel_waiters = [asyncio.create_task(own_cancel_event.wait())]
+        if ambient_cancel_event is not None:
+            cancel_waiters.append(asyncio.create_task(ambient_cancel_event.wait()))
 
         finished, unfinished = await asyncio.wait(
-            [future_t, cancel_f], return_when=asyncio.FIRST_COMPLETED
+            [future_t, *cancel_waiters], return_when=asyncio.FIRST_COMPLETED
         )
 
-        for task in finished:
-            if task == cancel_f:
-                typed_task = cast(asyncio.Task[None], task)
-                for untask in unfinished:
-                    untask.cancel()
-                    try:
-                        await untask
-                    except asyncio.CancelledError:
-                        pass
+        # Tidy up whatever lost the race (a pending cancel waiter, or the work
+        # task when a cancel event fired first). Cancelling ``future_t`` here is
+        # what unwinds an in-flight coroutine/async-generator step.
+        for untask in unfinished:
+            untask.cancel()
+            try:
+                await untask
+            except asyncio.CancelledError:
+                pass
 
-                error = asyncio.CancelledError(f"Future {task} was cancelled")
-
+        if future_t in finished:
+            exception = future_t.exception()
+            if exception:
                 if signals:
-                    signals.cancelled.emit(error)
+                    signals.errored.emit(exception)
 
-                raise error
+                raise exception
 
-            elif task == future_t:
-                for untask in unfinished:
-                    untask.cancel()
-                    try:
-                        await untask
-                    except asyncio.CancelledError:
-                        pass
+            typed_task = cast(asyncio.Task[Tuple[T, contextvars.Context]], future_t)
+            result = typed_task.result()
 
-                exception = task.exception()
-                if exception:
-                    if signals:
-                        signals.errored.emit(exception)
+            if signals:
+                try:
+                    signals.returned.emit(result)
+                except Exception as e:
+                    raise e
 
-                    raise exception
+            return result
 
-                typed_task = cast(
-                    asyncio.Task[Tuple[T, contextvars.Context]], task
-                )
+        # A cancel event won the race.
+        error = asyncio.CancelledError("Future was cancelled")
 
-                result = typed_task.result()
+        if signals:
+            signals.cancelled.emit(error)
 
-                if signals:
-                    try:
-                        signals.returned.emit(result)
-                    except Exception as e:
-                        raise e
-
-                return result
-
-            else:
-                raise Exception(
-                    f"Task {task} was not cancelled and not the future task. This should never happen"
-                )
-
-        raise Exception("Should never happen")
+        raise error
 
     return KoilFuture(
-        asyncio.run_coroutine_threadsafe(passed_with_context(), loop), cancel_event
+        asyncio.run_coroutine_threadsafe(passed_with_context(), loop), own_cancel_event
     )
 
 
@@ -377,9 +464,13 @@ def iterate_async_sharing_context(
 
     ctxs = contextvars.copy_context()
 
-    cancel_event = current_cancel_event.get() or KoilThreadSafeEvent(loop)
+    # See run_async_sharing_context for why the per-future and ambient cancel
+    # events are kept distinct: cancelling this future must not poison the
+    # shared ambient scope event read by later unkoil() calls.
+    ambient_cancel_event = current_cancel_event.get()
+    own_cancel_event = KoilThreadSafeEvent(loop)
 
-    if cancel_event.is_set():
+    if ambient_cancel_event is not None and ambient_cancel_event.is_set():
         raise ThreadCancelledError("Thread was cancelled")
 
     async def passed_with_context():
@@ -395,64 +486,48 @@ def iterate_async_sharing_context(
             newcontext = contextvars.copy_context()
             return None, newcontext
 
-        cancel_f = asyncio.create_task(cancel_event.wait())
         future_t = asyncio.create_task(context_future())
+        cancel_waiters = [asyncio.create_task(own_cancel_event.wait())]
+        if ambient_cancel_event is not None:
+            cancel_waiters.append(asyncio.create_task(ambient_cancel_event.wait()))
 
         finished, unfinished = await asyncio.wait(
-            [future_t, cancel_f], return_when=asyncio.FIRST_COMPLETED
+            [future_t, *cancel_waiters], return_when=asyncio.FIRST_COMPLETED
         )
 
-        for task in finished:
-            if task == cancel_f:
-                for untask in unfinished:
-                    untask.cancel()
-                    try:
-                        await untask
-                    except asyncio.CancelledError:
-                        pass
+        for untask in unfinished:
+            untask.cancel()
+            try:
+                await untask
+            except asyncio.CancelledError:
+                pass
 
-                error = CancelledError(f"Future {task} was cancelled")
-
+        if future_t in finished:
+            exception = future_t.exception()
+            if exception:
                 if signals:
-                    signals.cancelled.emit(error)
+                    signals.errored.emit(exception)
 
-                raise error
+                raise exception
 
-            elif task == future_t:
-                for untask in unfinished:
-                    untask.cancel()
-                    try:
-                        await untask
-                    except asyncio.CancelledError:
-                        pass
+            typed_task = cast(asyncio.Task[Tuple[None, contextvars.Context]], future_t)
+            result = typed_task.result()
 
-                exception = task.exception()
-                if exception:
-                    if signals:
-                        signals.errored.emit(exception)
+            if signals:
+                try:
+                    signals.done.emit(None)
+                except Exception as e:
+                    raise e
 
-                    raise exception
+            return result
 
-                typed_task = cast(
-                    asyncio.Task[Tuple[None, contextvars.Context]], task
-                )
-                result = typed_task.result()
+        error = CancelledError("Future was cancelled")
 
-                if signals:
-                    try:
-                        signals.done.emit(None)
-                    except Exception as e:
-                        raise e
+        if signals:
+            signals.cancelled.emit(error)
 
-                return result
-
-            else:
-                raise Exception(
-                    f"Task {task} was not cancelled and not the future task. This should never happen"
-                )
-
-        raise Exception("Should never happen")
+        raise error
 
     return KoilFuture(
-        asyncio.run_coroutine_threadsafe(passed_with_context(), loop), cancel_event
+        asyncio.run_coroutine_threadsafe(passed_with_context(), loop), own_cancel_event
     )
