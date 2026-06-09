@@ -22,6 +22,21 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+#: Default time, in seconds, that :meth:`Koil.__exit__` waits for the loop
+#: thread to stop *after* the initial graceful :attr:`Koil.cancel_timeout` wait
+#: has already elapsed, before giving up and abandoning the thread.
+#:
+#: The loop thread is a daemon, so abandoning it does not block interpreter
+#: exit; this bound exists so that uncancellable work on the loop (a blocking
+#: call with no ``await``, or a ``run_threaded`` worker that never checks
+#: :func:`~koil.context.check_cancelled`) cannot hang ``__exit__`` forever.
+#:
+#: This is the process-wide default. Override it globally by reassigning this
+#: module attribute, or per instance via the ``shutdown_join_timeout`` argument
+#: to :class:`Koil`. It is intentionally *separate* from
+#: :attr:`Koil.cancel_timeout`, which bounds the initial graceful wait.
+SHUTDOWN_JOIN_TIMEOUT: float = 5.0
+
 
 class KoilProtocol(Protocol):
     """Minimal protocol satisfied by any synchronous context manager."""
@@ -161,12 +176,16 @@ class Koil:
         self,
         sync_in_async: bool = True,
         uvify: bool = True,
+        shutdown_join_timeout: float | None = None,
     ) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self.running = False
         self.sync_in_async = sync_in_async
         self.cancel_timeout = 2.0
+        #: Extra grace (seconds) to wait for the loop thread to stop on exit
+        #: before abandoning it. ``None`` uses :data:`SHUTDOWN_JOIN_TIMEOUT`.
+        self.shutdown_join_timeout = shutdown_join_timeout
 
     def exit(self) -> None:
         """Convenience alias for ``__exit__(None, None, None)``."""
@@ -254,11 +273,38 @@ class Koil:
                 # thread guarantees we only return once `loop.close()` has run.
                 self._loop_thread.join(timeout=self.cancel_timeout)
                 if self._loop_thread.is_alive():
-                    logger.warning(
-                        "Shutting Down takes longer than expected. Probably we are "
-                        "having loose Threads or a blocked task? Keyboard interrupt?"
+                    # Graceful stop didn't land within cancel_timeout. Wait a
+                    # bounded bit longer, then abandon the thread rather than
+                    # block the caller forever. This happens when the loop is
+                    # wedged on uncancellable work (a blocking call with no
+                    # await, or a run_threaded worker that never checks
+                    # check_cancelled), so loop.stop() never gets to run.
+                    join_timeout = (
+                        SHUTDOWN_JOIN_TIMEOUT
+                        if self.shutdown_join_timeout is None
+                        else self.shutdown_join_timeout
                     )
-                    self._loop_thread.join()
+                    logger.warning(
+                        "Koil loop thread %r did not stop within %.1fs; waiting "
+                        "up to %.1fs more before abandoning it. A coroutine is "
+                        "likely blocking the event loop. Keyboard interrupt?",
+                        self._loop_thread.name,
+                        self.cancel_timeout,
+                        join_timeout,
+                    )
+                    self._loop_thread.join(timeout=join_timeout)
+                    if self._loop_thread.is_alive():
+                        logger.warning(
+                            "Koil loop thread %r is STILL running after %.1fs and "
+                            "is being abandoned. This means uncancellable work is "
+                            "blocking the event loop (a blocking call with no "
+                            "await, or a run_threaded worker that never checks "
+                            "check_cancelled). The thread is a daemon and will be "
+                            "killed on interpreter exit, but resources it holds "
+                            "will not be released cleanly.",
+                            self._loop_thread.name,
+                            self.cancel_timeout + join_timeout,
+                        )
                 self._loop_thread = None
 
             # Drop the reference so a second __exit__ doesn't call

@@ -24,7 +24,10 @@ from koil.errors import CancelledError, ThreadCancelledError
 from koil.types import AnyCallable
 from koil.context import current_cancel_event, KoilThreadSafeEvent
 import inspect
+import logging
 from koil.protocols import TaskSignalProtocol, IteratorSignalProtocol
+
+logger = logging.getLogger(__name__)
 
 
 def check_is_asyncgen(func: AnyCallable) -> bool:
@@ -57,6 +60,27 @@ def check_is_syncfunc(func: AnyCallable) -> bool:
 
 P = ParamSpec("P")
 T = TypeVar("T")
+
+#: Default interval, in seconds, at which a blocking
+#: :meth:`KoilFuture.result` wakes up to let the interpreter deliver a pending
+#: signal (e.g. a Ctrl+C SIGINT).
+#:
+#: Python only runs signal handlers on the main thread when it returns from a
+#: C-level blocking call, so an indefinite ``Future.result()`` would defer a
+#: KeyboardInterrupt until the task completes. This poll interval bounds that
+#: delay. It adds *no* latency to fast tasks: ``result(timeout=...)`` returns the
+#: instant the future is done, so the timeout only ever fires while genuinely
+#: waiting.
+#:
+#: This is the process-wide default. Override it globally by reassigning this
+#: module attribute (``koil.utils.RESULT_POLL_INTERVAL = 0.1``), or per call via
+#: the ``poll_interval`` argument to :meth:`KoilFuture.result`. Smaller values
+#: make Ctrl+C more responsive at the cost of slightly more wakeups while idle.
+#:
+#: This is intentionally *separate* from :attr:`koil.loop.Koil.cancel_timeout`,
+#: which bounds how long shutdown waits for a worker to acknowledge cancellation
+#: — a different concern with different tuning needs.
+RESULT_POLL_INTERVAL: float = 0.05
 
 
 def _safe_set_event(event: asyncio.Event) -> None:
@@ -91,13 +115,20 @@ class _KoilFutureBase(Generic[T]):
         self.future = future
         self.cancel_event = cancel_event
         self._cancel_requested = False
+        self._cancel_reason: str | None = None
 
-    def cancel(self) -> bool:
+    def cancel(self, reason: str | None = None) -> bool:
         """Request cancellation of the running task.
 
         Sets the associated cancel event so that koil worker code that checks
         :func:`~koil.context.check_cancelled` will raise
         :class:`~koil.errors.ThreadCancelledError` on its next poll.
+
+        Args:
+            reason: Optional human-readable explanation of why cancellation was
+                requested (e.g. ``"keyboard interrupt"``). Recorded on the
+                future as :attr:`cancel_reason` and logged, so the origin of a
+                cancellation can be traced after the fact.
 
         Returns:
             ``True`` if the task was still running at the time of the request;
@@ -105,9 +136,16 @@ class _KoilFutureBase(Generic[T]):
         """
         if not self.future.done():
             self._cancel_requested = True
+            self._cancel_reason = reason
+            logger.debug("Cancelling %r (reason: %s)", self, reason or "unspecified")
             _safe_set_event(self.cancel_event)
             return True
         return False
+
+    @property
+    def cancel_reason(self) -> str | None:
+        """The ``reason`` passed to the most recent :meth:`cancel` call, if any."""
+        return self._cancel_reason
 
     def done(self) -> bool:
         """Return ``True`` if the underlying future has completed."""
@@ -119,21 +157,52 @@ class _KoilFutureBase(Generic[T]):
         assert self.future, "Task was never run! Please run task before"
         return self._cancel_requested or self.cancel_event.is_set()
 
-    def result(self) -> T:
+    def result(self, poll_interval: float | None = None) -> T:
         """Block until the result is available and return it.
 
         Also propagates any updated :class:`~contextvars.ContextVar` values
         from the worker back into the calling context.
 
+        The wait is performed in short slices rather than as one indefinite
+        block so that a Ctrl+C (SIGINT) on the main thread is delivered promptly
+        instead of being swallowed until the coroutine finishes on the
+        background loop.
+
+        Args:
+            poll_interval: Seconds to wait per slice before re-checking for a
+                pending signal. Defaults to the module-wide
+                :data:`RESULT_POLL_INTERVAL`.
+
         Raises:
             CancelledError: If the task was cancelled.
+            KeyboardInterrupt: If the caller is interrupted while waiting. The
+                in-flight task is *signalled* to cancel (cooperatively) before
+                the interrupt is re-raised; it is not joined, so it may still be
+                unwinding on the background thread when control returns.
             Any exception raised by the coroutine/function.
         """
         assert self.future, "Task was never run! Please run task before"
+        interval = RESULT_POLL_INTERVAL if poll_interval is None else poll_interval
         try:
+            # Wait in bounded slices so a pending Ctrl+C on the main thread is
+            # delivered between slices instead of deferred until the task
+            # completes. Use the non-raising concurrent.futures.wait() rather
+            # than result(timeout=...): on 3.11 concurrent.futures.TimeoutError
+            # *is* the builtin TimeoutError, so catching a result() timeout would
+            # also swallow a real TimeoutError raised by the coroutine and spin
+            # forever. wait() never raises, so the subsequent result() re-raises
+            # the coroutine's actual exception (TimeoutError included).
+            while not self.future.done():
+                concurrent.futures.wait([self.future], timeout=interval)
             res, context = self.future.result()
         except CancelledError as e:
             raise e
+        except KeyboardInterrupt:
+            # The coroutine is still running on the background loop. Signal
+            # cooperative cancellation so it unwinds instead of being orphaned,
+            # then propagate the interrupt to the caller without waiting.
+            self.cancel(reason="keyboard interrupt")
+            raise
 
         for ctx, value in context.items():
             ctx.set(value)
