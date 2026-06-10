@@ -3,7 +3,9 @@ from .bridge import (
     unkoil_gen,
     unkoil_task,
     iterate_threaded,
+    iterate_threaded_bridged,
     run_threaded,
+    run_threaded_bridged,
     sleep,
 )
 from .decorators import koilable
@@ -25,7 +27,9 @@ __all__ = [
     "sleep",
     "check_cancelled",
     "iterate_threaded",
+    "iterate_threaded_bridged",
     "run_threaded",
+    "run_threaded_bridged",
     "KoilFuture",
     "KoilIterator",
 ]

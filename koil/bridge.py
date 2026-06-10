@@ -8,12 +8,15 @@ the background asyncio event loop managed by :class:`~koil.loop.Koil`:
 * :func:`unkoil_task` — submit a coroutine without blocking; returns a
   :class:`~koil.utils.KoilFuture`.
 * :func:`run_threaded` — run synchronous code on a thread pool from inside
-  async code, with koil context propagation and cooperative cancellation.
+  async code, with copy-in koil context propagation and cooperative
+  cancellation. :func:`run_threaded_bridged` is the bidirectional variant.
 * :func:`iterate_threaded` — drive a synchronous generator from async code
   one step at a time via :func:`run_threaded`.
+  :func:`iterate_threaded_bridged` is the bidirectional variant.
 * :func:`sleep` — a koil-aware replacement for :func:`time.sleep` that
   respects cancellation.
 """
+
 import asyncio
 import concurrent.futures
 import threading
@@ -181,7 +184,9 @@ def unkoil_gen(
             if send_val is None:
                 future = run_async_sharing_context(ait.__anext__, koil_loop, None)
             else:
-                future = run_async_sharing_context(ait.__anext__, koil_loop, None, send_val)  # type: ignore
+                future = run_async_sharing_context(
+                    ait.__anext__, koil_loop, None, send_val
+                )  # type: ignore
 
             try:
                 send_val = yield future.result()
@@ -282,6 +287,117 @@ def unkoil_task(
     )
 
 
+S = TypeVar("S")
+
+# ContextVars that run_threaded sets on the worker thread for koil's own
+# bookkeeping. They must never be bridged back into the caller's context: the
+# loop/koil references are already correct there, and the cancel event is
+# per-call worker state that is meaningless (and would leak) outside the thread.
+_BRIDGE_INTERNAL_VARS: Tuple[contextvars.ContextVar[Any], ...] = (
+    global_koil,
+    global_koil_loop,
+    current_cancel_event,
+)
+
+
+def _propagate_context_out(worker_context: contextvars.Context) -> None:
+    """Re-apply ContextVars mutated inside *worker_context* into the caller's context.
+
+    This is what makes the bridging variants bidirectional: any ContextVar the
+    threaded function set (or changed) is re-applied in the caller's context, so the
+    async side observes it after the call returns. Koil-internal vars
+    (:data:`_BRIDGE_INTERNAL_VARS`) are skipped so per-call worker state never leaks
+    outward.
+
+    Must be called from the same context the caller awaited :func:`run_threaded` in
+    (i.e. not from inside a freshly copied context), so the ``.set()`` calls land on
+    the caller's context.
+    """
+    for var in worker_context:
+        if var in _BRIDGE_INTERNAL_VARS:
+            continue
+        var.set(worker_context[var])
+
+
+async def _run_threaded(
+    sync_func: Callable[P, R],
+    sync_args: Tuple[Any, ...],
+    sync_kwargs: Dict[str, Any],
+    *,
+    bridge: bool,
+) -> R:
+    """Shared implementation behind :func:`run_threaded` / :func:`run_threaded_isolated`.
+
+    Submits *sync_func* to ``loop.run_in_executor`` with koil context, cancel-event
+    setup, and the caller's :class:`~contextvars.Context` copied in. When *bridge* is
+    true, ContextVars the worker mutated are copied back out into the caller's context
+    on successful completion (skipping koil-internal vars).
+    """
+    loop = asyncio.get_running_loop()
+
+    koil = global_koil.get()
+
+    def wrapper(
+        cancel_event: KoilThreadSafeEvent,
+        worker_context: contextvars.Context,
+    ) -> R:
+        # Run the body *inside* the copied context via Context.run instead of
+        # mutating the executor thread's own context with bare .set() calls.
+        # run_in_executor reuses pooled threads, so leftover contextvars would
+        # otherwise leak into the next, unrelated task scheduled on that thread.
+        def body() -> R:
+            global_koil.set(koil)
+            global_koil_loop.set(loop)
+            current_cancel_event.set(cancel_event)
+
+            try:
+                return sync_func(*sync_args, **sync_kwargs)  # type: ignore
+            except StopIteration as e:
+                # Transform so asyncio doesn't swallow it or crash.
+                raise RuntimeError("Threaded function raised StopIteration") from e
+            except Exception as e:
+                raise e
+
+        return worker_context.run(body)
+
+    # The worker mutates this copy (not the executor thread's own context); in
+    # bridge mode we read its post-run values back out into the caller below.
+    worker_context = contextvars.copy_context()
+    # A thread-safe asyncio.Event so a nested unkoil() inside the worker can
+    # await this same event without a bridging thread. The worker checks it via
+    # is_set() (a plain bool read); we set() it from the loop on cancellation.
+    cancel_event = KoilThreadSafeEvent(loop)
+
+    future = loop.run_in_executor(
+        None,
+        wrapper,
+        cancel_event,
+        worker_context,
+    )  # type: ignore
+    try:
+        shielded_f = await asyncio.shield(future)
+    except asyncio.CancelledError as e:
+        cancel_event.set()
+
+        try:
+            await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 10)
+        except ThreadCancelledError:
+            logging.info("Future in another thread was successfully cancelled")
+        except asyncio.TimeoutError as te:
+            raise KoilError(
+                f"We could not successfully cancel the future {future} in another thread. Make sure you are not blocking the thread with a long running task and check if you call check_cancelled periodically."
+            ) from te
+
+        raise e
+
+    # Bidirectional bridging: re-apply any ContextVars the worker set back into
+    # the caller's context. Done only on success, and only when bridging is on.
+    if bridge:
+        _propagate_context_out(worker_context)
+
+    return shielded_f
+
+
 async def run_threaded(
     sync_func: Callable[P, R],
     *sync_args: P.args,
@@ -299,6 +415,12 @@ async def run_threaded(
       :func:`unkoil` or :func:`check_cancelled`.
     * A per-call :class:`~koil.context.KoilThreadSafeEvent` as the cancel
       signal.
+
+    Context propagation is **copy-in only**: the caller's
+    :class:`~contextvars.ContextVar` values are copied *into* the worker thread, but
+    any ContextVar the worker sets or changes stays isolated to that thread and is
+    **not** propagated back into the caller's context. Use :func:`run_threaded_bridged`
+    for bidirectional propagation, where worker mutations are also bridged back out.
 
     If the awaiting coroutine is cancelled, the cancel event is set and the
     function waits for the worker to finish (up to
@@ -319,99 +441,47 @@ async def run_threaded(
         KoilError: If the worker thread does not finish within the cancel
             timeout.
     """
-    loop = asyncio.get_running_loop()
-
-    koil = global_koil.get()
-
-    def wrapper(
-        cancel_event: KoilThreadSafeEvent,
-        context: contextvars.Context,
-        sync_args: Tuple[Any],
-        sync_kwargs: Dict[str, Any],
-    ) -> R:
-        # Run the body *inside* the copied context via Context.run instead of
-        # mutating the executor thread's own context with bare .set() calls.
-        # run_in_executor reuses pooled threads, so leftover contextvars would
-        # otherwise leak into the next, unrelated task scheduled on that thread.
-        def body() -> R:
-            global_koil.set(koil)
-            global_koil_loop.set(loop)
-            current_cancel_event.set(cancel_event)
-
-            try:
-                return sync_func(*sync_args, **sync_kwargs)  # type: ignore
-            except StopIteration as e:
-                # Transform so asyncio doesn't swallow it or crash.
-                raise RuntimeError("Threaded function raised StopIteration") from e
-            except Exception as e:
-                raise e
-
-        return context.run(body)
-
-    context = contextvars.copy_context()
-    # A thread-safe asyncio.Event so a nested unkoil() inside the worker can
-    # await this same event without a bridging thread. The worker checks it via
-    # is_set() (a plain bool read); we set() it from the loop on cancellation.
-    cancel_event = KoilThreadSafeEvent(loop)
-
-    future = loop.run_in_executor(
-        None,
-        wrapper,
-        cancel_event,
-        context,
-        sync_args,
-        sync_kwargs,
-    )  # type: ignore
-    try:
-        shielded_f = await asyncio.shield(future)
-        return shielded_f
-    except asyncio.CancelledError as e:
-        cancel_event.set()
-
-        try:
-            await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 10)
-        except ThreadCancelledError:
-            logging.info("Future in another thread was successfully cancelled")
-        except asyncio.TimeoutError as te:
-            raise KoilError(
-                f"We could not successfully cancel the future {future} in another thread. Make sure you are not blocking the thread with a long running task and check if you call check_cancelled periodically."
-            ) from te
-
-        raise e
+    return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=False)
 
 
-S = TypeVar("S")
-
-
-async def iterate_threaded(
-    sync_gen: Callable[P, Generator[R, S, None]],
+async def run_threaded_bridged(
+    sync_func: Callable[P, R],
     *sync_args: P.args,
     **sync_kwargs: P.kwargs,
-) -> AsyncGenerator[R, S]:
-    """Drive a synchronous generator from async code one step at a time.
+) -> R:
+    """Like :func:`run_threaded`, but with **bidirectional** context propagation.
 
-    Instead of running the whole generator on a dedicated worker thread and
-    pumping every value across a sync↔async queue, the generator is resumed one
-    ``send()`` per :func:`run_threaded` call. Each step is a short thread hop,
-    so :func:`run_threaded` provides context propagation, koil setup, and
-    cooperative cancellation for free — no queue needed.
-
-    .. note::
-       Because each step runs in a fresh :func:`run_threaded` call, consecutive
-       steps may land on different pooled threads. Generators that hold a
-       thread-affine resource (e.g. an ``RLock``) across a ``yield``, or that
-       mutate a :class:`~contextvars.ContextVar` expecting it to persist into
-       the next ``yield``, will not see single-thread behaviour.
+    The caller's :class:`~contextvars.ContextVar` values are copied *into* the worker
+    thread, and any ContextVar the worker sets or changes is copied back *out* into
+    the caller's context once the call returns. Koil-internal vars are never bridged
+    out, and bridging happens only on successful completion — not on cancellation or
+    error. Use this when the threaded function should publish contextvar changes back
+    to the async caller. Everything else (koil setup, cancellation) matches
+    :func:`run_threaded`.
 
     Args:
-        sync_gen: A synchronous generator function.
-        *sync_args: Positional arguments forwarded to *sync_gen*.
-        **sync_kwargs: Keyword arguments forwarded to *sync_gen*.
+        sync_func: A synchronous callable to run on the thread pool.
+        *sync_args: Positional arguments forwarded to *sync_func*.
+        **sync_kwargs: Keyword arguments forwarded to *sync_func*.
 
-    Yields:
-        Values produced by the underlying synchronous generator.
+    Returns:
+        The return value of *sync_func*.
     """
+    return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=True)
 
+
+async def _iterate_threaded(
+    sync_gen: Callable[P, Generator[R, S, None]],
+    sync_args: Tuple[Any, ...],
+    sync_kwargs: Dict[str, Any],
+    *,
+    bridge: bool,
+) -> AsyncGenerator[R, S]:
+    """Shared implementation behind :func:`iterate_threaded` / :func:`iterate_threaded_bridged`.
+
+    Each step is driven via :func:`_run_threaded` with the given *bridge* mode, so the
+    context-propagation behaviour matches the chosen public wrapper.
+    """
     generator: Generator[R, S, None] | None = None
 
     def step(send_value: Any) -> R:
@@ -430,7 +500,7 @@ async def iterate_threaded(
     send_value: Any = None
     while True:
         try:
-            value = await run_threaded(step, send_value)
+            value = await _run_threaded(step, (send_value,), {}, bridge=bridge)
         except KoilStopIteration:
             return
 
@@ -441,5 +511,65 @@ async def iterate_threaded(
             # yield. Close it in a worker thread so its finally blocks run,
             # then propagate GeneratorExit.
             if generator is not None:
-                await run_threaded(generator.close)
+                await _run_threaded(generator.close, (), {}, bridge=bridge)
             raise
+
+
+def iterate_threaded(
+    sync_gen: Callable[P, Generator[R, S, None]],
+    *sync_args: P.args,
+    **sync_kwargs: P.kwargs,
+) -> AsyncGenerator[R, S]:
+    """Drive a synchronous generator from async code one step at a time.
+
+    Instead of running the whole generator on a dedicated worker thread and
+    pumping every value across a sync↔async queue, the generator is resumed one
+    ``send()`` per :func:`run_threaded` call. Each step is a short thread hop,
+    so :func:`run_threaded` provides context propagation, koil setup, and
+    cooperative cancellation for free — no queue needed.
+
+    .. note::
+       Because each step runs in a fresh :func:`run_threaded` call, consecutive
+       steps may land on different pooled threads. Generators that hold a
+       thread-affine resource (e.g. an ``RLock``) across a ``yield`` will not see
+       single-thread behaviour.
+
+       Context propagation is **copy-in only**: each step copies the caller's context
+       *into* its worker thread but does not bridge the generator's contextvar
+       mutations back out. A ContextVar set in one step is therefore **not** visible
+       to the next step or to the caller — every step starts from the caller's value.
+       Use :func:`iterate_threaded_bridged` for bidirectional propagation, where
+       mutations persist across yields.
+
+    Args:
+        sync_gen: A synchronous generator function.
+        *sync_args: Positional arguments forwarded to *sync_gen*.
+        **sync_kwargs: Keyword arguments forwarded to *sync_gen*.
+
+    Yields:
+        Values produced by the underlying synchronous generator.
+    """
+    return _iterate_threaded(sync_gen, sync_args, sync_kwargs, bridge=False)
+
+
+def iterate_threaded_bridged(
+    sync_gen: Callable[P, Generator[R, S, None]],
+    *sync_args: P.args,
+    **sync_kwargs: P.kwargs,
+) -> AsyncGenerator[R, S]:
+    """Like :func:`iterate_threaded`, but with **bidirectional** context propagation.
+
+    Each step bridges the generator's contextvar mutations back into the caller,
+    which re-seeds them into the next step. As a result, :class:`~contextvars.ContextVar`
+    mutations **do** persist across yields: a value set in one step is visible to the
+    next step and to the caller. Everything else matches :func:`iterate_threaded`.
+
+    Args:
+        sync_gen: A synchronous generator function.
+        *sync_args: Positional arguments forwarded to *sync_gen*.
+        **sync_kwargs: Keyword arguments forwarded to *sync_gen*.
+
+    Yields:
+        Values produced by the underlying synchronous generator.
+    """
+    return _iterate_threaded(sync_gen, sync_args, sync_kwargs, bridge=True)

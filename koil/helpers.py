@@ -6,7 +6,9 @@ from koil.bridge import (
     unkoil_gen,
     unkoil_task,
     run_threaded,
+    run_threaded_bridged,
     iterate_threaded,
+    iterate_threaded_bridged,
     KOIL_CANCEL_TIMEOUT,
 )
 from koil.context import KoilThreadSafeEvent
@@ -22,7 +24,9 @@ __all__ = [
     "unkoil_gen",
     "unkoil_task",
     "run_threaded",
+    "run_threaded_bridged",
     "iterate_threaded",
+    "iterate_threaded_bridged",
     "run_spawned",
     "iterate_spawned",
     "KOIL_CANCEL_TIMEOUT",
