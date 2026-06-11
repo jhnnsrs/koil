@@ -6,10 +6,12 @@ internals and concurrent.futures glue) pruned away. ``rewrite_tracebacks=False``
 and ``KOIL_FULL_TRACEBACK=1`` restore the full traceback.
 """
 
+import os
 import traceback
 
 import pytest
 
+import koil as koil_package
 from koil import Koil
 from koil.bridge import (
     iterate_threaded,
@@ -22,12 +24,18 @@ from koil.bridge import (
 from koil.tracebacks import prune_traceback
 
 
+# The actual installed package directory — a substring check like
+# "/koil/koil/" breaks on CI, where the checkout root is .../koil/koil and
+# therefore *every* repo file (this test included) matches.
+KOIL_DIR = os.path.dirname(os.path.abspath(koil_package.__file__)) + os.sep
+
+
 def frames(e: BaseException):
     return traceback.extract_tb(e.__traceback__)
 
 
 def koil_frames(e: BaseException):
-    return [f for f in frames(e) if "/koil/koil/" in f.filename.replace("\\", "/")]
+    return [f for f in frames(e) if os.path.abspath(f.filename).startswith(KOIL_DIR)]
 
 
 def futures_frames(e: BaseException):
