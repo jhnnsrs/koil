@@ -13,8 +13,8 @@ dependencies = [
 [project.optional-dependencies]
 qtpy = ["qtpy>1"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=7.2.0",
     "black>=22.10.0",
     "pytest-cov>=4.0.0",
