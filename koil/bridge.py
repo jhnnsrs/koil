@@ -19,6 +19,7 @@ the background asyncio event loop managed by :class:`~koil.loop.Koil`:
 
 import asyncio
 import concurrent.futures
+import inspect
 import threading
 import time
 
@@ -42,6 +43,7 @@ from koil.utils import (
     aclose_async_gen_threadsafe,
     KoilFuture,
 )
+from koil.tracebacks import prune_traceback, should_rewrite
 from typing import ParamSpec
 
 
@@ -54,6 +56,29 @@ R = TypeVar("R")
 SendType = TypeVar("SendType")
 
 KOIL_CANCEL_TIMEOUT = 10.0
+
+
+def _reject_awaitable_object(value: Any, func_name: str) -> None:
+    """Raise a pointed TypeError when *value* is an already-created coroutine
+    or async-generator object instead of the async function itself.
+
+    ``unkoil(fetch("url"))`` is a natural mistake for anyone used to
+    ``asyncio.run``; without this guard it fails much later with an opaque
+    "'coroutine' object is not callable".
+    """
+    if inspect.iscoroutine(value):
+        value.close()  # suppress the "coroutine was never awaited" warning
+        raise TypeError(
+            f"{func_name}() expects an async function, not a coroutine object. "
+            f"Pass the function and its arguments separately: "
+            f"{func_name}(fn, *args) — not {func_name}(fn(*args))."
+        )
+    if inspect.isasyncgen(value):
+        raise TypeError(
+            f"{func_name}() expects an async generator function, not an async "
+            f"generator object. Pass the function and its arguments separately: "
+            f"{func_name}(fn, *args) — not {func_name}(fn(*args))."
+        )
 
 
 def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
@@ -172,26 +197,41 @@ def unkoil_gen(
     Raises:
         KoilError: If no koil context is active.
     """
+    _reject_awaitable_object(iterator, "unkoil_gen")
     koil_loop = get_koiled_loop_or_raise()
 
     ait = iterator(*args, **kwargs).__aiter__()
 
     future: KoilFuture[R] | None = None
     try:
-        future = run_async_sharing_context(ait.__anext__, koil_loop, None)
-        send_val = yield future.result()
+        future = run_async_sharing_context(ait.__anext__, koil_loop, None, None)
+        # result() is fetched outside the yield so that exceptions thrown
+        # *into* the generator at the yield (GeneratorExit from close(), a
+        # throw() from the consumer) never pass through the pruning handler.
+        try:
+            value = future.result()
+        except BaseException as e:
+            if should_rewrite():
+                prune_traceback(e, keep_boundary=True)
+            raise
+        send_val = yield value
         while True:
             if send_val is None:
-                future = run_async_sharing_context(ait.__anext__, koil_loop, None)
+                future = run_async_sharing_context(ait.__anext__, koil_loop, None, None)
             else:
                 future = run_async_sharing_context(
-                    ait.__anext__, koil_loop, None, send_val
+                    ait.__anext__, koil_loop, None, None, send_val
                 )  # type: ignore
 
             try:
-                send_val = yield future.result()
+                value = future.result()
             except StopAsyncIteration:
                 break
+            except BaseException as e:
+                if should_rewrite():
+                    prune_traceback(e, keep_boundary=True)
+                raise
+            send_val = yield value
     finally:
         # Close the underlying async generator on the loop so its finally
         # blocks run now, not whenever it is garbage-collected or the loop is
@@ -199,6 +239,81 @@ def unkoil_gen(
         # cancelled by result(); let it settle first so we don't aclose() a
         # generator whose __anext__ is still unwinding (which would raise
         # "aclose(): asynchronous generator is already running").
+        if future is not None and not future.future.done():
+            future.cancel(reason="generator closed")
+            concurrent.futures.wait([future.future], timeout=KOIL_CANCEL_TIMEOUT)
+        aclose_async_gen_threadsafe(ait, koil_loop)
+
+
+def unkoil_gen_with_timeout(
+    iterator: Callable[P, AsyncGenerator[R, SendType]],
+    timeout: float,
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> Generator[R, SendType, None]:
+    """Like :func:`unkoil_gen`, but each iteration step is bounded by *timeout*.
+
+    The timeout is a **per-step inactivity bound**, not a total bound: each
+    ``__anext__`` submitted to the loop must produce its value (or finish)
+    within *timeout* seconds, but a generator may run arbitrarily long overall
+    as long as it keeps yielding. On expiry the in-flight step is cancelled on
+    the loop and :class:`~koil.errors.KoilTimeoutError` is raised out of the
+    consuming ``for`` loop; the underlying async generator's ``finally`` blocks
+    still run via the normal close path.
+
+    Args:
+        iterator: An async generator function.
+        timeout: Maximum seconds each iteration step may take.
+        *args: Positional arguments forwarded to *iterator*.
+        **kwargs: Keyword arguments forwarded to *iterator*.
+
+    Yields:
+        Values produced by the underlying async generator.
+
+    Raises:
+        KoilTimeoutError: If a step does not complete within *timeout* seconds.
+        ValueError: If *timeout* is negative.
+        KoilError: If no koil context is active.
+    """
+    _reject_awaitable_object(iterator, "unkoil_gen_with_timeout")
+    koil_loop = get_koiled_loop_or_raise()
+
+    ait = iterator(*args, **kwargs).__aiter__()
+
+    future: KoilFuture[R] | None = None
+    try:
+        future = run_async_sharing_context(ait.__anext__, koil_loop, None, timeout)
+        try:
+            value = future.result()
+        except BaseException as e:
+            if should_rewrite():
+                prune_traceback(e, keep_boundary=True)
+            raise
+        send_val = yield value
+        while True:
+            if send_val is None:
+                future = run_async_sharing_context(
+                    ait.__anext__, koil_loop, None, timeout
+                )
+            else:
+                future = run_async_sharing_context(
+                    ait.__anext__, koil_loop, None, timeout, send_val
+                )  # type: ignore
+
+            try:
+                value = future.result()
+            except StopAsyncIteration:
+                break
+            except BaseException as e:
+                if should_rewrite():
+                    prune_traceback(e, keep_boundary=True)
+                raise
+            send_val = yield value
+    finally:
+        # See unkoil_gen: let a cancelled last step settle before aclosing the
+        # generator on the loop. A timed-out step's future is already done
+        # (KoilTimeoutError), so this skips straight to the close.
         if future is not None and not future.future.done():
             future.cancel(reason="generator closed")
             concurrent.futures.wait([future.future], timeout=KOIL_CANCEL_TIMEOUT)
@@ -236,13 +351,72 @@ def unkoil(
         KoilError: If no koil context is active.
         Any exception raised by *coro*.
     """
+    _reject_awaitable_object(coro, "unkoil")
     koil_loop = get_koiled_loop_or_raise()
 
     context_aware_future = run_async_sharing_context(
-        coro, koil_loop, None, *args, **kwargs
+        coro, koil_loop, None, None, *args, **kwargs
     )
 
-    return context_aware_future.result()
+    try:
+        return context_aware_future.result()  # <- crossed the koil bridge
+    except BaseException as e:
+        if should_rewrite():
+            prune_traceback(e, keep_boundary=True)
+        raise
+
+
+def unkoil_with_timeout(
+    coro: Union[
+        Callable[P, Coroutine[Any, Any, R]],
+        Callable[P, Awaitable[R]],
+    ],
+    timeout: float,
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    """Like :func:`unkoil`, but bounded by *timeout* seconds.
+
+    The deadline is enforced on the koil loop: when it expires the coroutine is
+    cancelled (cooperatively, with the ambient
+    :attr:`~koil.loop.Koil.cancel_timeout` as acknowledgement grace) and
+    :class:`~koil.errors.KoilTimeoutError` is raised to the caller.
+
+    This is a separate function rather than a ``timeout`` keyword on
+    :func:`unkoil` because ``unkoil`` forwards all keyword arguments to *coro*
+    — a reserved keyword would collide with user functions that take a
+    ``timeout`` of their own.
+
+    Args:
+        coro: An async function (coroutine function or awaitable-returning
+            callable).
+        timeout: Maximum seconds to wait for *coro* to complete.
+        *args: Positional arguments forwarded to *coro*.
+        **kwargs: Keyword arguments forwarded to *coro*.
+
+    Returns:
+        Whatever *coro* returns.
+
+    Raises:
+        KoilTimeoutError: If *coro* does not complete within *timeout* seconds.
+        ValueError: If *timeout* is negative.
+        KoilError: If no koil context is active.
+        Any exception raised by *coro*.
+    """
+    _reject_awaitable_object(coro, "unkoil_with_timeout")
+    koil_loop = get_koiled_loop_or_raise()
+
+    context_aware_future = run_async_sharing_context(
+        coro, koil_loop, None, timeout, *args, **kwargs
+    )
+
+    try:
+        return context_aware_future.result()  # <- crossed the koil bridge
+    except BaseException as e:
+        if should_rewrite():
+            prune_traceback(e, keep_boundary=True)
+        raise
 
 
 TaskReturn = TypeVar("TaskReturn")
@@ -276,12 +450,63 @@ def unkoil_task(
     Raises:
         KoilError: If no koil context is active.
     """
+    _reject_awaitable_object(coro, "unkoil_task")
     koil_loop = get_koiled_loop_or_raise()
 
     return run_async_sharing_context(
         coro,
         koil_loop,
         None,
+        None,
+        *args,
+        **kwargs,
+    )
+
+
+def unkoil_task_with_timeout(
+    coro: Union[
+        Callable[P, Coroutine[Any, Any, R]],
+        Callable[P, Awaitable[R]],
+    ],
+    timeout: float,
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> KoilFuture[R]:
+    """Like :func:`unkoil_task`, but the submitted coroutine is bounded by
+    *timeout* seconds.
+
+    The deadline is enforced on the koil loop at submission time, so it applies
+    even if :meth:`~koil.utils.KoilFuture.result` is never called: a
+    fire-and-forget task is still cancelled when the deadline expires, and the
+    future resolves with :class:`~koil.errors.KoilTimeoutError` (surfaced on
+    ``result()`` or via Qt signals).
+
+    For a wait bound applied only at the *call site* of ``result()``, use
+    ``unkoil_task(...).result(timeout=...)`` instead.
+
+    Args:
+        coro: An async function (coroutine function or awaitable-returning
+            callable).
+        timeout: Maximum seconds the coroutine may run on the loop.
+        *args: Positional arguments forwarded to *coro*.
+        **kwargs: Keyword arguments forwarded to *coro*.
+
+    Returns:
+        A :class:`~koil.utils.KoilFuture` representing the pending coroutine.
+
+    Raises:
+        ValueError: If *timeout* is negative.
+        KoilError: If no koil context is active.
+    """
+    _reject_awaitable_object(coro, "unkoil_task_with_timeout")
+    koil_loop = get_koiled_loop_or_raise()
+
+    return run_async_sharing_context(
+        coro,
+        koil_loop,
+        None,
+        timeout,
         *args,
         **kwargs,
     )
@@ -333,6 +558,7 @@ async def _run_threaded(
     true, ContextVars the worker mutated are copied back out into the caller's context
     on successful completion (skipping koil-internal vars).
     """
+    __tracebackhide__ = True
     loop = asyncio.get_running_loop()
 
     koil = global_koil.get()
@@ -341,11 +567,14 @@ async def _run_threaded(
         cancel_event: KoilThreadSafeEvent,
         worker_context: contextvars.Context,
     ) -> R:
+        __tracebackhide__ = True
+
         # Run the body *inside* the copied context via Context.run instead of
         # mutating the executor thread's own context with bare .set() calls.
         # run_in_executor reuses pooled threads, so leftover contextvars would
         # otherwise leak into the next, unrelated task scheduled on that thread.
         def body() -> R:
+            __tracebackhide__ = True
             global_koil.set(koil)
             global_koil_loop.set(loop)
             current_cancel_event.set(cancel_event)
@@ -355,8 +584,6 @@ async def _run_threaded(
             except StopIteration as e:
                 # Transform so asyncio doesn't swallow it or crash.
                 raise RuntimeError("Threaded function raised StopIteration") from e
-            except Exception as e:
-                raise e
 
         return worker_context.run(body)
 
@@ -441,7 +668,12 @@ async def run_threaded(
         KoilError: If the worker thread does not finish within the cancel
             timeout.
     """
-    return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=False)
+    try:
+        return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=False)
+    except BaseException as e:
+        if should_rewrite():
+            prune_traceback(e, keep_boundary=True)
+        raise
 
 
 async def run_threaded_bridged(
@@ -467,7 +699,12 @@ async def run_threaded_bridged(
     Returns:
         The return value of *sync_func*.
     """
-    return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=True)
+    try:
+        return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=True)
+    except BaseException as e:
+        if should_rewrite():
+            prune_traceback(e, keep_boundary=True)
+        raise
 
 
 async def _iterate_threaded(
@@ -481,10 +718,15 @@ async def _iterate_threaded(
 
     Each step is driven via :func:`_run_threaded` with the given *bridge* mode, so the
     context-propagation behaviour matches the chosen public wrapper.
+
+    This async-gen frame is also the traceback boundary marker for exceptions
+    raised by the underlying generator: the public wrappers return the asyncgen
+    immediately, so their frames never appear in a traceback.
     """
     generator: Generator[R, S, None] | None = None
 
     def step(send_value: Any) -> R:
+        __tracebackhide__ = True
         # Create the generator lazily on the first step so any work done while
         # building it happens in the thread, not on the loop.
         nonlocal generator
@@ -503,6 +745,10 @@ async def _iterate_threaded(
             value = await _run_threaded(step, (send_value,), {}, bridge=bridge)
         except KoilStopIteration:
             return
+        except BaseException as e:
+            if should_rewrite():
+                prune_traceback(e, keep_boundary=True)
+            raise
 
         try:
             send_value = yield value
@@ -511,7 +757,14 @@ async def _iterate_threaded(
             # yield. Close it in a worker thread so its finally blocks run,
             # then propagate GeneratorExit.
             if generator is not None:
-                await _run_threaded(generator.close, (), {}, bridge=bridge)
+                try:
+                    await _run_threaded(generator.close, (), {}, bridge=bridge)
+                except BaseException as e:
+                    # Errors raised by the generator's finally blocks during
+                    # the early close get the same pruning treatment.
+                    if should_rewrite():
+                        prune_traceback(e, keep_boundary=True)
+                    raise
             raise
 
 

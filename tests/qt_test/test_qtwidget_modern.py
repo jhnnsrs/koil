@@ -291,3 +291,50 @@ def test_context(qtbot: QtBot):
         qtbot.mouseClick(widget.call_context_button, QtCore.Qt.LeftButton) # type: ignore
 
     assert b.args[0] == 6   # type: ignore
+
+
+@pytest.mark.qt
+def test_qt_koil_forwards_config(qtbot: QtBot):
+    """QtKoil/create_qt_koil forward Koil constructor configuration."""
+    widget = QtWidgets.QWidget()
+    qtbot.addWidget(widget)  # type: ignore
+
+    koil = create_qt_koil(
+        parent=widget,
+        auto_enter=False,
+        cancel_timeout=5.0,
+        uvify=False,
+        rewrite_tracebacks=False,
+        shutdown_join_timeout=1.0,
+    )
+    assert koil.cancel_timeout == 5.0
+    assert koil.uvify is False
+    assert koil.rewrite_tracebacks is False
+    assert koil.shutdown_join_timeout == 1.0
+
+
+@pytest.mark.qt
+def test_async_to_qt_timeout_emits_errored(qtbot: QtBot):
+    """A timed-out async task emits errored with KoilTimeoutError, not cancelled."""
+    from koil.errors import KoilTimeoutError
+
+    class TimeoutWidget(QtWidgets.QWidget):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.koil = create_qt_koil(parent=self)
+            self.slow_task = async_to_qt(self.slow, timeout=0.05)
+
+        async def slow(self):
+            await asyncio.sleep(5)
+
+    widget = TimeoutWidget()
+    qtbot.addWidget(widget)  # type: ignore
+
+    cancelled_calls = []
+    widget.slow_task.cancelled.connect(lambda e: cancelled_calls.append(e))
+
+    with qtbot.waitSignal(widget.slow_task.errored, timeout=5000) as blocker:  # type: ignore
+        widget.slow_task.run()
+
+    assert isinstance(blocker.args[0], KoilTimeoutError)  # type: ignore
+    assert not cancelled_calls

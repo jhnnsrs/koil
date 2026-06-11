@@ -118,3 +118,24 @@ async def test_run_spawned_cancel_timeout():
         global_koil.reset(token)
         blocker.set()  # unblock the background thread so it can finish
         await asyncio.sleep(0)  # yield so the executor can clean up
+
+
+@pytest.mark.timeout(10)
+async def test_cancel_timeout_constructor_kwarg():
+    """cancel_timeout can be set via the Koil constructor, not only as an attribute."""
+    blocker = threading.Event()
+
+    k = Koil(cancel_timeout=0.1)
+    assert k.cancel_timeout == 0.1
+    token = global_koil.set(k)
+
+    try:
+        task = asyncio.create_task(run_threaded(blocker.wait))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises((KoilError, asyncio.CancelledError)):
+            await task
+    finally:
+        global_koil.reset(token)
+        blocker.set()
+        await asyncio.sleep(0)

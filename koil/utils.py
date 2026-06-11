@@ -10,6 +10,7 @@ coroutines/generators to the koil loop while propagating the caller's
 import asyncio
 import contextvars
 import concurrent.futures
+import time
 from typing import (
     AsyncIterator,
     Awaitable,
@@ -20,9 +21,10 @@ from typing import (
     TypeVar,
     cast,
 )
-from koil.errors import CancelledError, ThreadCancelledError
+from koil.errors import CancelledError, KoilTimeoutError, ThreadCancelledError
 from koil.types import AnyCallable
-from koil.context import current_cancel_event, KoilThreadSafeEvent
+from koil.context import current_cancel_event, global_koil, KoilThreadSafeEvent
+from koil.tracebacks import prune_traceback, should_rewrite
 import inspect
 import logging
 from koil.protocols import TaskSignalProtocol, IteratorSignalProtocol
@@ -81,6 +83,19 @@ T = TypeVar("T")
 #: which bounds how long shutdown waits for a worker to acknowledge cancellation
 #: — a different concern with different tuning needs.
 RESULT_POLL_INTERVAL: float = 0.05
+
+
+#: Fallback grace period, in seconds, granted to a timed-out task to
+#: acknowledge its cancellation when no :class:`~koil.loop.Koil` instance (and
+#: therefore no :attr:`~koil.loop.Koil.cancel_timeout`) is ambient. Matches the
+#: fallback used by :func:`koil.bridge.run_threaded` on cancellation.
+CANCEL_GRACE_FALLBACK: float = 10.0
+
+
+def _cancel_grace(koil: object) -> float:
+    """The cancellation grace period for *koil*, or the module fallback."""
+    value = getattr(koil, "cancel_timeout", None) if koil is not None else None
+    return CANCEL_GRACE_FALLBACK if value is None else value
 
 
 #: Bounded time, in seconds, that :func:`aclose_async_gen_threadsafe` waits for a
@@ -200,6 +215,7 @@ class _KoilFutureBase(Generic[T]):
         self.cancel_event = cancel_event
         self._cancel_requested = False
         self._cancel_reason: str | None = None
+        self._timed_out = False
 
     def cancel(self, reason: str | None = None) -> bool:
         """Request cancellation of the running task.
@@ -241,7 +257,33 @@ class _KoilFutureBase(Generic[T]):
         assert self.future, "Task was never run! Please run task before"
         return self._cancel_requested or self.cancel_event.is_set()
 
-    def result(self, poll_interval: float | None = None) -> T:
+    def _timeout_expired(self, timeout: float) -> KoilTimeoutError:
+        """Handle an expired :meth:`result` deadline; returns the error to raise.
+
+        Signals cooperative cancellation via the existing cancel machinery,
+        then grants the task the ambient :attr:`~koil.loop.Koil.cancel_timeout`
+        grace to acknowledge before giving up on it.
+        """
+        __tracebackhide__ = True
+        self._timed_out = True
+        self.cancel(reason=f"timeout after {timeout}s")
+        grace = _cancel_grace(global_koil.get())
+        done, _ = concurrent.futures.wait([self.future], timeout=grace)
+        if not done:
+            return KoilTimeoutError(
+                f"Task did not complete within {timeout}s and did not "
+                f"acknowledge cancellation within the {grace}s grace period. "
+                f"Make sure the task is not blocking the loop with "
+                f"uncancellable work and that workers call check_cancelled "
+                f"periodically."
+            )
+        return KoilTimeoutError(
+            f"Task did not complete within {timeout}s; it was cancelled."
+        )
+
+    def result(
+        self, timeout: float | None = None, poll_interval: float | None = None
+    ) -> T:
         """Block until the result is available and return it.
 
         Also propagates any updated :class:`~contextvars.ContextVar` values
@@ -253,11 +295,19 @@ class _KoilFutureBase(Generic[T]):
         background loop.
 
         Args:
+            timeout: Maximum seconds to wait for the result. On expiry the task
+                is signalled to cancel (cooperatively, with the ambient
+                :attr:`~koil.loop.Koil.cancel_timeout` as acknowledgement
+                grace) and :class:`~koil.errors.KoilTimeoutError` is raised.
+                ``None`` (the default) waits indefinitely. ``0`` requires the
+                task to already be done.
             poll_interval: Seconds to wait per slice before re-checking for a
                 pending signal. Defaults to the module-wide
                 :data:`RESULT_POLL_INTERVAL`.
 
         Raises:
+            KoilTimeoutError: If *timeout* elapses before the task completes.
+            ValueError: If *timeout* is negative.
             CancelledError: If the task was cancelled.
             KeyboardInterrupt: If the caller is interrupted while waiting. The
                 in-flight task is *signalled* to cancel (cooperatively) before
@@ -265,8 +315,12 @@ class _KoilFutureBase(Generic[T]):
                 unwinding on the background thread when control returns.
             Any exception raised by the coroutine/function.
         """
+        __tracebackhide__ = True
         assert self.future, "Task was never run! Please run task before"
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout must be non-negative")
         interval = RESULT_POLL_INTERVAL if poll_interval is None else poll_interval
+        deadline = None if timeout is None else time.monotonic() + timeout
         try:
             # Wait in bounded slices so a pending Ctrl+C on the main thread is
             # delivered between slices instead of deferred until the task
@@ -276,16 +330,33 @@ class _KoilFutureBase(Generic[T]):
             # also swallow a real TimeoutError raised by the coroutine and spin
             # forever. wait() never raises, so the subsequent result() re-raises
             # the coroutine's actual exception (TimeoutError included).
+            # A done() check always precedes the deadline check, so a completed
+            # future returns its result even with timeout=0.
             while not self.future.done():
-                concurrent.futures.wait([self.future], timeout=interval)
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise self._timeout_expired(timeout)  # type: ignore[arg-type]
+                    slice_timeout = min(interval, remaining)
+                else:
+                    slice_timeout = interval
+                concurrent.futures.wait([self.future], timeout=slice_timeout)
             res, context = self.future.result()
-        except CancelledError as e:
-            raise e
+        except CancelledError:
+            raise
         except KeyboardInterrupt:
             # The coroutine is still running on the background loop. Signal
             # cooperative cancellation so it unwinds instead of being orphaned,
             # then propagate the interrupt to the caller without waiting.
             self.cancel(reason="keyboard interrupt")
+            raise
+        except BaseException as e:
+            # This frame is both a pruning boundary and marker-hidden: a direct
+            # unkoil_task(...).result() caller keeps exactly this one koil
+            # frame, while a boundary one level up (unkoil) prunes it away
+            # again, leaving its own frame as the single marker.
+            if should_rewrite():
+                prune_traceback(e, keep_boundary=True)
             raise
 
         for ctx, value in context.items():
@@ -316,6 +387,8 @@ def run_async_sharing_context(
     coro: Callable[P, Awaitable[T]],
     loop: asyncio.AbstractEventLoop,
     signals: TaskSignalProtocol[T] | None,
+    timeout: float | None = None,
+    /,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> KoilFuture[T]:
@@ -329,6 +402,10 @@ def run_async_sharing_context(
     * Races the coroutine against the active cancel event; if the event fires
       first, the coroutine is cancelled and
       :class:`~asyncio.CancelledError` is raised.
+    * Optionally races the coroutine against a *timeout* enforced on the loop;
+      on expiry the coroutine is cancelled (bounded by the ambient
+      :attr:`~koil.loop.Koil.cancel_timeout` grace) and the future resolves
+      with :class:`~koil.errors.KoilTimeoutError`.
     * Optionally emits lifecycle signals (*returned*, *errored*, *cancelled*)
       if a *signals* object is provided (used by the Qt integration).
 
@@ -336,6 +413,11 @@ def run_async_sharing_context(
         coro: An async callable to invoke.
         loop: The koil event loop to run the coroutine on.
         signals: Optional signal holder for Qt integration callbacks.
+        timeout: Maximum seconds the coroutine may run, or ``None`` for no
+            limit. A timeout counts as an *error* (the ``errored`` signal is
+            emitted), not as a cancellation. Note this parameter sits before
+            ``*args``: callers forwarding user arguments positionally must pass
+            it explicitly.
         *args: Positional arguments forwarded to *coro*.
         **kwargs: Keyword arguments forwarded to *coro*.
 
@@ -343,11 +425,18 @@ def run_async_sharing_context(
         A :class:`KoilFuture` that resolves to the return value of *coro*.
 
     Raises:
+        ValueError: If *timeout* is negative.
         ThreadCancelledError: If the current cancel event is already set when
             this function is called.
     """
+    if timeout is not None and timeout < 0:
+        raise ValueError("timeout must be non-negative")
 
     ctxs = contextvars.copy_context()
+    # Captured on the calling thread: the loop-side task context typically has
+    # no ambient koil, but the cancellation grace below should follow the
+    # caller's koil configuration.
+    submitting_koil = global_koil.get()
 
     # Two distinct cancel events, deliberately *not* the same object:
     #
@@ -372,7 +461,10 @@ def run_async_sharing_context(
         raise ThreadCancelledError("Thread was cancelled")
 
     async def passed_with_context():
+        __tracebackhide__ = True
+
         async def context_future():
+            __tracebackhide__ = True
             for ctx, value in ctxs.items():
                 ctx.set(value)
 
@@ -385,24 +477,51 @@ def run_async_sharing_context(
         cancel_waiters = [asyncio.create_task(own_cancel_event.wait())]
         if ambient_cancel_event is not None:
             cancel_waiters.append(asyncio.create_task(ambient_cancel_event.wait()))
-
-        finished, unfinished = await asyncio.wait(
-            [future_t, *cancel_waiters], return_when=asyncio.FIRST_COMPLETED
+        timeout_waiter = (
+            asyncio.create_task(asyncio.sleep(timeout)) if timeout is not None else None
         )
 
-        # Tidy up whatever lost the race (a pending cancel waiter, or the work
-        # task when a cancel event fired first). Cancelling ``future_t`` here is
-        # what unwinds an in-flight coroutine/async-generator step.
+        race = [future_t, *cancel_waiters]
+        if timeout_waiter is not None:
+            race.append(timeout_waiter)
+
+        finished, unfinished = await asyncio.wait(
+            race, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Tidy up whatever lost the race (a pending cancel/timeout waiter, or
+        # the work task when a cancel event or the deadline fired first).
+        # Cancelling ``future_t`` here is what unwinds an in-flight
+        # coroutine/async-generator step. When the deadline fired, the wait for
+        # the work task to acknowledge is bounded by the caller's
+        # cancel_timeout grace so an uncancellable coroutine cannot wedge the
+        # future forever.
+        timed_out = timeout_waiter is not None and timeout_waiter in finished
+        acknowledged = True
         for untask in unfinished:
             untask.cancel()
             try:
-                await untask
+                if untask is future_t and timed_out:
+                    grace = _cancel_grace(submitting_koil)
+                    await asyncio.wait_for(asyncio.shield(untask), timeout=grace)
+                else:
+                    await untask
+            except asyncio.TimeoutError:
+                acknowledged = False
             except asyncio.CancelledError:
                 pass
 
         if future_t in finished:
             exception = future_t.exception()
             if exception:
+                # Prune on the loop side so signal handlers (the Qt errored
+                # slots) receive a clean traceback too. global_koil is
+                # typically unset in this task's context, so should_rewrite()
+                # falls back to the module default. The sync-side boundary
+                # prunes the same exception object again — idempotent.
+                if should_rewrite():
+                    prune_traceback(exception)
+
                 if signals:
                     signals.errored.emit(exception)
 
@@ -418,6 +537,28 @@ def run_async_sharing_context(
                     raise e
 
             return result
+
+        if timed_out:
+            # The deadline won the race. A timeout is an error, not a
+            # cancellation, so the errored signal fires and the cancelled
+            # signal does not.
+            if acknowledged:
+                error: BaseException = KoilTimeoutError(
+                    f"Task did not complete within {timeout}s; it was cancelled."
+                )
+            else:
+                error = KoilTimeoutError(
+                    f"Task did not complete within {timeout}s and did not "
+                    f"acknowledge cancellation within the grace period. Make "
+                    f"sure the task is not blocking the loop with "
+                    f"uncancellable work and that workers call "
+                    f"check_cancelled periodically."
+                )
+
+            if signals:
+                signals.errored.emit(error)
+
+            raise error
 
         # A cancel event won the race.
         error = asyncio.CancelledError("Future was cancelled")
@@ -436,6 +577,8 @@ def iterate_async_sharing_context(
     coro: Callable[P, AsyncIterator[T]],
     loop: asyncio.AbstractEventLoop,
     signals: IteratorSignalProtocol[T] | None,
+    timeout: float | None = None,
+    /,
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> KoilFuture[None]:
@@ -450,6 +593,9 @@ def iterate_async_sharing_context(
         coro: An async generator callable.
         loop: The koil event loop to run the generator on.
         signals: Optional signal holder for Qt integration callbacks.
+        timeout: Maximum seconds the generator may take to drain *in total*,
+            or ``None`` for no limit. Sits before ``*args``; callers forwarding
+            user arguments positionally must pass it explicitly.
         *args: Positional arguments forwarded to *coro*.
         **kwargs: Keyword arguments forwarded to *coro*.
 
@@ -458,11 +604,15 @@ def iterate_async_sharing_context(
         exhausted.
 
     Raises:
+        ValueError: If *timeout* is negative.
         ThreadCancelledError: If the current cancel event is already set when
             this function is called.
     """
+    if timeout is not None and timeout < 0:
+        raise ValueError("timeout must be non-negative")
 
     ctxs = contextvars.copy_context()
+    submitting_koil = global_koil.get()
 
     # See run_async_sharing_context for why the per-future and ambient cancel
     # events are kept distinct: cancelling this future must not poison the
@@ -474,7 +624,10 @@ def iterate_async_sharing_context(
         raise ThreadCancelledError("Thread was cancelled")
 
     async def passed_with_context():
+        __tracebackhide__ = True
+
         async def context_future():
+            __tracebackhide__ = True
             for ctx, value in ctxs.items():
                 ctx.set(value)
 
@@ -490,21 +643,41 @@ def iterate_async_sharing_context(
         cancel_waiters = [asyncio.create_task(own_cancel_event.wait())]
         if ambient_cancel_event is not None:
             cancel_waiters.append(asyncio.create_task(ambient_cancel_event.wait()))
-
-        finished, unfinished = await asyncio.wait(
-            [future_t, *cancel_waiters], return_when=asyncio.FIRST_COMPLETED
+        timeout_waiter = (
+            asyncio.create_task(asyncio.sleep(timeout)) if timeout is not None else None
         )
 
+        race = [future_t, *cancel_waiters]
+        if timeout_waiter is not None:
+            race.append(timeout_waiter)
+
+        finished, unfinished = await asyncio.wait(
+            race, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        timed_out = timeout_waiter is not None and timeout_waiter in finished
+        acknowledged = True
         for untask in unfinished:
             untask.cancel()
             try:
-                await untask
+                if untask is future_t and timed_out:
+                    grace = _cancel_grace(submitting_koil)
+                    await asyncio.wait_for(asyncio.shield(untask), timeout=grace)
+                else:
+                    await untask
+            except asyncio.TimeoutError:
+                acknowledged = False
             except asyncio.CancelledError:
                 pass
 
         if future_t in finished:
             exception = future_t.exception()
             if exception:
+                # See run_async_sharing_context: prune before emitting so Qt
+                # errored slots get a clean traceback; module default applies.
+                if should_rewrite():
+                    prune_traceback(exception)
+
                 if signals:
                     signals.errored.emit(exception)
 
@@ -520,6 +693,24 @@ def iterate_async_sharing_context(
                     raise e
 
             return result
+
+        if timed_out:
+            # See run_async_sharing_context: a timeout is an error, not a
+            # cancellation.
+            if acknowledged:
+                timeout_error: BaseException = KoilTimeoutError(
+                    f"Generator did not finish within {timeout}s; it was cancelled."
+                )
+            else:
+                timeout_error = KoilTimeoutError(
+                    f"Generator did not finish within {timeout}s and did not "
+                    f"acknowledge cancellation within the grace period."
+                )
+
+            if signals:
+                signals.errored.emit(timeout_error)
+
+            raise timeout_error
 
         error = CancelledError("Future was cancelled")
 

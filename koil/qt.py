@@ -194,7 +194,7 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
     def __init__(
         self,
         coro: Callable[Concatenate[QtFuture[T], P], None],
-        timeout: int | None = None,
+        timeout: float | None = None,
         parent: QtCore.QObject | None = None,
     ):
         super().__init__(parent)
@@ -226,6 +226,7 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
             qtfuture.reject(e)
 
     async def acall(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        __tracebackhide__ = True
         qtfuture: QtFuture[T] = QtFuture()
         ctx = contextvars.copy_context()
         self._called.emit((qtfuture, args, kwargs, ctx))
@@ -257,7 +258,7 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
     def __init__(
         self,
         coro: Callable[Concatenate[QtGenerator[T], P], None],
-        timeout: int | None = None,
+        timeout: float | None = None,
         parent: QtCore.QObject | None = None,
     ):
         super().__init__(parent)
@@ -289,6 +290,7 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
             qtgenerator.throw(e)
 
     async def acall(self, *args: P.args, **kwargs: P.kwargs) -> AsyncGenerator[T, None]:
+        __tracebackhide__ = True
         qtgenerator: QtGenerator[T] = QtGenerator()
         ctx = contextvars.copy_context()
         self._called.emit((qtgenerator, args, kwargs, ctx))
@@ -326,10 +328,22 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
     def __init__(
         self,
         function: Callable[P, Awaitable[T]],
+        timeout: float | None = None,
         parent: QtCore.QObject | None = None,
     ):
+        """
+        Args:
+            function: The async function to wrap.
+            timeout: Maximum seconds a run may take, enforced on the koil loop.
+                On expiry the task is cancelled and the ``errored`` signal is
+                emitted with a :class:`~koil.errors.KoilTimeoutError` (the
+                ``cancelled`` signal does not fire). ``None`` (default) means
+                no limit.
+            parent: Qt parent object.
+        """
         super().__init__(parent=parent)
         self.function = function
+        self.timeout = timeout
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
 
     def on_returnedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
@@ -353,6 +367,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
             self.function,
             koil_loop,
             my_signals,
+            self.timeout,
             *args,
             **kwargs,
         )
@@ -377,10 +392,24 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
         self,
         function: Callable[P, AsyncIterator[T]],
         unique: bool = False,
+        timeout: float | None = None,
         parent: QtCore.QObject | None = None,
     ):
+        """
+        Args:
+            function: The async generator function to wrap.
+            unique: Reserved for future use.
+            timeout: Maximum seconds the generator may take to drain *in
+                total* (it runs as one loop task), unlike the per-step bound of
+                :func:`~koil.bridge.unkoil_gen_with_timeout`. On expiry the
+                ``errored`` signal is emitted with a
+                :class:`~koil.errors.KoilTimeoutError`. ``None`` (default)
+                means no limit.
+            parent: Qt parent object.
+        """
         super().__init__(parent=parent)
         self.function = function
+        self.timeout = timeout
         self._yieldedwithoutcontext.connect(self.on_yieldedwithoutcontext)
 
     def on_yieldedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
@@ -405,6 +434,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
             self.function,
             koil_loop,
             my_signals,
+            self.timeout,
             *args,
             **kwargs,
         )
@@ -433,8 +463,22 @@ class WrappedObject(QtCore.QObject):
 
 
 class QtKoil(Koil):
-    def __init__(self, parent: QtCore.QObject):
-        super().__init__()
+    def __init__(
+        self,
+        parent: QtCore.QObject,
+        sync_in_async: bool = True,
+        uvify: bool = True,
+        shutdown_join_timeout: float | None = None,
+        rewrite_tracebacks: bool = True,
+        cancel_timeout: float = 2.0,
+    ):
+        super().__init__(
+            sync_in_async=sync_in_async,
+            uvify=uvify,
+            shutdown_join_timeout=shutdown_join_timeout,
+            rewrite_tracebacks=rewrite_tracebacks,
+            cancel_timeout=cancel_timeout,
+        )
         self.parent = parent
         self._qobject = None
 
@@ -469,8 +513,23 @@ class QtKoilMixin(QtWidgets.QWidget):
         return self._koil
 
 
-def create_qt_koil(parent: QtCore.QObject, auto_enter: bool = True) -> QtKoil:
-    koil = QtKoil(parent=parent)
+def create_qt_koil(
+    parent: QtCore.QObject,
+    auto_enter: bool = True,
+    sync_in_async: bool = True,
+    uvify: bool = True,
+    shutdown_join_timeout: float | None = None,
+    rewrite_tracebacks: bool = True,
+    cancel_timeout: float = 2.0,
+) -> QtKoil:
+    koil = QtKoil(
+        parent=parent,
+        sync_in_async=sync_in_async,
+        uvify=uvify,
+        shutdown_join_timeout=shutdown_join_timeout,
+        rewrite_tracebacks=rewrite_tracebacks,
+        cancel_timeout=cancel_timeout,
+    )
     if auto_enter:
         koil.enter()
     return koil

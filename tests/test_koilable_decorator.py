@@ -85,8 +85,8 @@ async def test_koilable_add_connectors_aenter_aexit_work():
 
 
 def test_koilable_requires_coroutine_aenter():
-    """Decorating a class whose __aenter__ is a plain function raises AssertionError."""
-    with pytest.raises(AssertionError):
+    """Decorating a class whose __aenter__ is a plain function raises TypeError."""
+    with pytest.raises(TypeError, match="__aenter__ must be a coroutine"):
 
         @koilable()
         class BadAenter:
@@ -98,8 +98,8 @@ def test_koilable_requires_coroutine_aenter():
 
 
 def test_koilable_requires_coroutine_aexit():
-    """Decorating a class whose __aexit__ is a plain function raises AssertionError."""
-    with pytest.raises(AssertionError):
+    """Decorating a class whose __aexit__ is a plain function raises TypeError."""
+    with pytest.raises(TypeError, match="__aexit__ must be a coroutine"):
 
         @koilable()
         class BadAexit:
@@ -108,6 +108,16 @@ def test_koilable_requires_coroutine_aexit():
 
             def __aexit__(self, *args):  # not async
                 pass
+
+
+def test_koilable_requires_aexit_present():
+    """Decorating a class with no __aexit__ at all raises a pointed TypeError."""
+    with pytest.raises(TypeError, match="must implement __aexit__"):
+
+        @koilable()
+        class MissingAexit:
+            async def __aenter__(self):
+                return self
 
 
 def test_koilable_reuses_existing_koil():
@@ -129,3 +139,63 @@ def test_koilable_standalone_creates_koil():
         # The decorator created a Koil and stored it under __koil
         assert getattr(m, "__koil", None) is not None
     assert not m.entered
+
+
+def test_koilable_bare_form():
+    """@koilable without parentheses decorates the class directly."""
+
+    @koilable
+    class BareModel:
+        entered = False
+
+        async def __aenter__(self):
+            self.entered = True
+            return self
+
+        async def __aexit__(self, *args):
+            self.entered = False
+
+    assert inspect.isclass(BareModel)
+    m = BareModel()
+    with m:
+        assert m.entered
+        assert getattr(m, "__koil", None) is not None
+    assert not m.entered
+
+
+def test_koilable_legacy_positional_fieldname():
+    """koilable("_field") keeps the legacy positional-fieldname contract."""
+
+    @koilable("_legacy_koil")
+    class LegacyModel:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    m = LegacyModel()
+    with m:
+        assert getattr(m, "_legacy_koil", None) is not None
+
+
+def test_koilable_enter_failure_tears_down_koil():
+    """A failing __aenter__ must not leak the auto-started Koil's loop thread."""
+
+    @koilable()
+    class FailsOnEnter:
+        async def __aenter__(self):
+            raise ValueError("boom")
+
+        async def __aexit__(self, *args):
+            pass
+
+    m = FailsOnEnter()
+    with pytest.raises(ValueError, match="boom"):
+        with m:
+            pass
+
+    assert global_koil.get() is None
+    auto_koil = getattr(m, "__koil", None)
+    assert auto_koil is not None
+    assert auto_koil.running is False

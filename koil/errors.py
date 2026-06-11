@@ -23,3 +23,17 @@ class ProcessCancelledError(KoilError):
 class CancelledError(KoilError):
     """Mimics ayncio.CancelledError for futures that are living in a koiled loop. Catch this
     as if you would catch asyncio.CancelledError."""
+
+
+class KoilTimeoutError(KoilError, TimeoutError):
+    """A koil bridge call exceeded its timeout.
+
+    Raised by the ``*_with_timeout`` bridge variants and by
+    :meth:`~koil.utils.KoilFuture.result` when a ``timeout`` is given. The
+    underlying task is signalled to cancel (cooperatively, bounded by
+    :attr:`~koil.loop.Koil.cancel_timeout`) before this is raised.
+
+    Inherits the builtin :class:`TimeoutError` (which on Python >= 3.11 is also
+    ``asyncio.TimeoutError`` and ``concurrent.futures.TimeoutError``), so a
+    plain ``except TimeoutError`` catches it too.
+    """

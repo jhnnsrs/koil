@@ -88,6 +88,55 @@ with Koil():
     result = unkoil(fetch, "https://example.com")
 ```
 
+### Configuring `Koil`
+
+All options have sensible defaults; you only pass what you want to change:
+
+```python
+with Koil(
+    sync_in_async=True,        # allow koil's sync bridges inside a running loop
+    uvify=True,                # use uvloop for the background loop if installed
+    shutdown_join_timeout=None,  # extra grace on teardown (None = 5.0s default)
+    rewrite_tracebacks=True,   # hide koil-internal frames in user tracebacks
+    cancel_timeout=2.0,        # grace for workers to acknowledge cancellation
+):
+    ...
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `sync_in_async` | `True` | Permits entering `Koil` and calling `unkoil` from a thread that already runs an asyncio loop (e.g. Jupyter notebooks). With `False`, doing so raises `ContextError` / `KoilError` instead — useful to catch accidental sync-in-async usage in pure-async applications. |
+| `uvify` | `True` | Use [uvloop](https://github.com/MagicStack/uvloop) for the background event loop when it is installed, falling back to the stdlib loop otherwise. Set to `False` to force the stdlib loop (on Windows this selects a `SelectorEventLoop`). |
+| `shutdown_join_timeout` | `None` | Extra seconds `__exit__` waits for the loop thread to stop *after* the initial graceful `cancel_timeout` wait, before abandoning it (the thread is a daemon, so the interpreter can still exit). `None` uses the module default `koil.loop.SHUTDOWN_JOIN_TIMEOUT` (5.0s). |
+| `rewrite_tracebacks` | `True` | Prune koil's internal machinery frames from the tracebacks of exceptions that cross a bridge, keeping exactly one koil frame as a marker (see below). |
+| `cancel_timeout` | `2.0` | How long, in seconds, koil waits for a cancelled worker to acknowledge cancellation: when a `run_threaded` task is cancelled, when a `*_with_timeout` deadline expires, and as the initial graceful wait in `__exit__`. Also settable as a plain attribute after construction. |
+
+One knob lives as a module attribute rather than a constructor argument:
+
+- `koil.utils.RESULT_POLL_INTERVAL` (default `0.05`) — how often a blocking `result()`/`unkoil` call wakes up so a pending Ctrl+C is delivered promptly. Smaller values make Ctrl+C more responsive at the cost of slightly more idle wakeups. It adds no latency to fast tasks. It is process-wide (a signal-delivery concern, not a per-loop one); override per call via `result(poll_interval=...)`.
+
+### Traceback rewriting
+
+When an exception raised in your code crosses a koil bridge, its traceback would normally include half a dozen frames of koil machinery and `concurrent.futures` glue. By default koil rewrites the traceback so you see your sync call site, **one** koil frame marking the bridge crossing, and then your failing async code:
+
+```
+Traceback (most recent call last):
+  File "app.py", line 14, in <module>
+    unkoil(load_profile)
+  File ".../koil/bridge.py", line 261, in unkoil
+    return context_aware_future.result()  # <- crossed the koil bridge
+  File "app.py", line 9, in load_profile
+    return await fetch_user(42)
+  File "app.py", line 6, in fetch_user
+    raise ValueError(f"no such user: {uid}")
+ValueError: no such user: 42
+```
+
+Exceptions raised by koil itself (e.g. a cancellation timeout) keep their full traceback — there the koil frames *are* the informative part. To get full tracebacks for everything:
+
+- per instance: `Koil(rewrite_tracebacks=False)`;
+- process-wide, without touching code: set the environment variable `KOIL_FULL_TRACEBACK=1` (this wins over everything — the escape hatch when debugging koil itself).
+
 ### One thread, many calls
 
 The background loop thread is created **once** when you enter the `Koil` context. Every subsequent `unkoil`, `unkoil_gen`, or `unkoil_task` call posts a coroutine to that existing thread via `asyncio.run_coroutine_threadsafe` — no new threads are spawned per call. The calling thread blocks on a `concurrent.futures.Future` until the result arrives; the loop thread continues processing other tasks in the meantime.
@@ -140,6 +189,55 @@ with Koil():
     # do other work
     result = future.result()   # blocks until done; future.cancel() signals cancellation
 ```
+
+---
+
+## Timeouts
+
+Every blocking bridge has a `*_with_timeout` variant that bounds the call and
+raises `KoilTimeoutError` on expiry. They are separate functions (not a
+`timeout=` keyword) so the timeout can never collide with a `timeout`
+argument of *your* function — your `*args`/`**kwargs` are forwarded untouched:
+
+```python
+from koil import (
+    Koil,
+    KoilTimeoutError,
+    unkoil_with_timeout,
+    unkoil_task_with_timeout,
+    unkoil_gen_with_timeout,
+)
+
+with Koil():
+    try:
+        result = unkoil_with_timeout(fetch, 5.0, "https://example.com")
+    except KoilTimeoutError:
+        ...  # fetch was cancelled on the loop and did not leak
+```
+
+What happens on expiry: the deadline is enforced **on the koil loop** — the
+coroutine is cancelled, koil waits up to `cancel_timeout` for it to
+acknowledge, and only then raises. A timed-out task is never silently
+orphaned. `KoilTimeoutError` subclasses both `KoilError` and the builtin
+`TimeoutError`, so a plain `except TimeoutError` catches it.
+
+- `unkoil_with_timeout(fn, timeout, *args, **kwargs)` — bounded `unkoil`.
+- `unkoil_task_with_timeout(fn, timeout, *args, **kwargs)` — the deadline is
+  enforced even if you never call `result()`; a fire-and-forget task is still
+  cancelled when it expires.
+- `unkoil_gen_with_timeout(fn, timeout, *args, **kwargs)` — a **per-step**
+  inactivity bound: each iteration step must produce its value within
+  `timeout` seconds, but the generator may run arbitrarily long overall as
+  long as it keeps yielding.
+- `future.result(timeout=...)` — a wait bound at the call site of an existing
+  `unkoil_task` future (mirrors `concurrent.futures.Future.result`). On
+  expiry the task is cancelled cooperatively before `KoilTimeoutError` is
+  raised.
+- Qt: `async_to_qt(fn, timeout=...)` and `async_gen_to_qt(fn, timeout=...)`
+  take the timeout at construction; expiry emits the `errored` signal with a
+  `KoilTimeoutError` (the `cancelled` signal does not fire). For the
+  generator wrapper the bound is the **total** drain time, since it runs as
+  one loop task.
 
 ---
 
@@ -258,12 +356,65 @@ with Koil():
 
 ---
 
-## The `@koilable` decorator
+## The `@koiled` decorator — dual sync/async functions
 
-`@koilable` generates `__enter__` / `__exit__` for any class that implements `__aenter__` / `__aexit__`. It starts a `Koil` automatically if none is active, making async context managers transparently usable in sync code.
+`@koiled` makes a single `async def` callable from both worlds: in an async
+context a call returns the awaitable as usual; in a sync context (inside a
+`with Koil():` block) the call runs on the koil loop and blocks for the
+result. Async generators work too (sync callers get a regular generator).
 
 ```python
-from koil import koilable, unkoil, unkoil_gen
+from koil import Koil, koiled
+import asyncio
+
+@koiled
+async def fetch(url: str) -> str:
+    await asyncio.sleep(0.1)
+    return f"<{url}>"
+
+@koiled
+async def stream(n: int):
+    for i in range(n):
+        await asyncio.sleep(0.01)
+        yield i
+
+# Sync caller
+with Koil():
+    print(fetch("https://example.com"))    # blocks, returns the str
+    for item in stream(3):
+        print(item)
+
+# Async caller — same functions
+async def main():
+    print(await fetch("https://example.com"))
+    async for item in stream(3):
+        print(item)
+```
+
+`@koiled(timeout=5)` bounds sync calls via `unkoil_with_timeout`. For static
+typing, the wrapper is typed from the sync caller's point of view; async
+callers can use the fully-typed original via `await fetch.aio(...)`.
+
+## `koiled_cm` — wrap an async context manager instance
+
+When you don't own the class (e.g. `httpx.AsyncClient`), wrap an instance:
+
+```python
+from koil import koiled_cm
+
+with koiled_cm(httpx.AsyncClient()) as client:
+    ...  # __aenter__/__aexit__ ran on the koil loop
+```
+
+If no koil context is active, a `Koil` is started on enter and torn down on
+exit (also when `__aenter__` raises).
+
+## The `@koilable` decorator
+
+`@koilable` generates `__enter__` / `__exit__` for any class that implements `__aenter__` / `__aexit__`. It starts a `Koil` automatically if none is active, making async context managers transparently usable in sync code. It works bare (`@koilable`) or with arguments (`@koilable(add_connectors=True)`).
+
+```python
+from koil import koilable, koiled
 import asyncio
 
 @koilable
@@ -275,26 +426,22 @@ class DataStream:
     async def __aexit__(self, *args):
         await asyncio.sleep(0)   # disconnect
 
+    @koiled
     async def fetch(self) -> int:
         await asyncio.sleep(0.01)
         return 42
 
+    @koiled
     async def stream(self):
         for i in range(5):
             await asyncio.sleep(0.01)
             yield i
 
-    def get(self) -> int:
-        return unkoil(self.fetch)
-
-    def items(self):
-        return unkoil_gen(self.stream)
-
 
 # Sync usage — no asyncio knowledge required
 with DataStream() as ds:
-    print(ds.get())
-    for item in ds.items():
+    print(ds.fetch())
+    for item in ds.stream():
         print(item)
 ```
 
@@ -354,6 +501,16 @@ class MyWidget(QtWidgets.QWidget):
 ```
 
 `qt_to_async` goes the other direction: it wraps a Qt slot so it can be awaited from inside the async loop, with the slot executing on the Qt main thread and resolving a `QtFuture` when done.
+
+---
+
+## Deprecated import paths
+
+The legacy shim modules `koil.koil`, `koil.helpers`, and `koil.vars` now emit
+a `DeprecationWarning` on attribute access and will be removed in a future
+major release — import from `koil.loop`, `koil.bridge`, and `koil.context`
+(or just `koil`) instead. The old `run_spawned` / `iterate_spawned` aliases
+are deprecated names for `run_threaded` / `iterate_threaded`.
 
 ---
 

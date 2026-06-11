@@ -177,12 +177,23 @@ class Koil:
         sync_in_async: bool = True,
         uvify: bool = True,
         shutdown_join_timeout: float | None = None,
+        rewrite_tracebacks: bool = True,
+        cancel_timeout: float = 2.0,
     ) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self.running = False
         self.sync_in_async = sync_in_async
-        self.cancel_timeout = 2.0
+        self.uvify = uvify
+        #: Seconds to wait for a cancelled worker to acknowledge cancellation:
+        #: both when a run_threaded task is cancelled and as the initial
+        #: graceful wait in __exit__. A plain attribute, so it can also be
+        #: adjusted after construction.
+        self.cancel_timeout = cancel_timeout
+        #: Drop koil-internal frames from tracebacks of exceptions that cross
+        #: the bridge (see :mod:`koil.tracebacks`). The KOIL_FULL_TRACEBACK=1
+        #: environment variable forces full tracebacks regardless.
+        self.rewrite_tracebacks = rewrite_tracebacks
         #: Extra grace (seconds) to wait for the loop thread to stop on exit
         #: before abandoning it. ``None`` uses :data:`SHUTDOWN_JOIN_TIMEOUT`.
         self.shutdown_join_timeout = shutdown_join_timeout

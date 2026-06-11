@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from koil.errors import ContextError, KoilError, ThreadCancelledError
-from koil.bridge import get_koiled_loop_or_raise, unkoil, unkoil_gen
+from koil.bridge import get_koiled_loop_or_raise, unkoil, unkoil_gen, unkoil_task
 from koil.loop import Koil
 from koil.context import check_cancelled, current_cancel_event, global_koil_loop
 
@@ -64,3 +64,27 @@ def test_check_cancelled_does_not_raise_when_event_is_clear():
         check_cancelled()  # should not raise
     finally:
         current_cancel_event.reset(token)
+
+
+def test_unkoil_rejects_coroutine_object():
+    """unkoil(fn()) — a natural asyncio.run-style mistake — gets a pointed error."""
+    with pytest.raises(TypeError, match="coroutine object"):
+        unkoil(_noop())
+
+
+def test_unkoil_task_rejects_coroutine_object():
+    with pytest.raises(TypeError, match="coroutine object"):
+        unkoil_task(_noop())
+
+
+def test_unkoil_gen_rejects_asyncgen_object():
+    with pytest.raises(TypeError, match="async generator object"):
+        gen = unkoil_gen(_noop_gen())
+        next(gen)
+
+
+def test_unkoil_coroutine_object_rejection_emits_no_unawaited_warning(recwarn):
+    """The rejected coroutine is closed, so no 'never awaited' RuntimeWarning."""
+    with pytest.raises(TypeError):
+        unkoil(_noop())
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
