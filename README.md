@@ -1,6 +1,6 @@
 # koil
 
-[![codecov](https://codecov.io/gh/jhnnsrs/koil/branch/master/graph/badge.svg?token=UGXEA2THBV)](https://codecov.io/gh/jhnnsrs/koil)
+[![codecov](https://codecov.io/gh/jhnnsrs/koil/branch/main/graph/badge.svg?token=KXYAR09EEC)](https://codecov.io/gh/jhnnsrs/koil)
 [![PyPI version](https://badge.fury.io/py/koil.svg)](https://pypi.org/project/koil/)
 ![Maintainer](https://img.shields.io/badge/maintainer-jhnnsrs-blue)
 [![PyPI pyversions](https://img.shields.io/pypi/pyversions/koil.svg)](https://pypi.python.org/pypi/koil/)
