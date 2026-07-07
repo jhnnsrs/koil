@@ -130,6 +130,15 @@ def get_threaded_loop(
     shutdown (see :meth:`Koil.__exit__`) to guarantee that ``loop.close()``
     has completed before the caller proceeds.
 
+    By default the loop thread is left visible to step debuggers, so a
+    breakpoint inside a coroutine running on it (the async "glue" between
+    :func:`~koil.bridge.run_threaded` workers) is hit. Set the ``KOIL_DO_TRACE``
+    environment variable to a falsy value (``0``/``false``/``no``/``off``) to
+    hide the loop thread from the debugger instead (the pre-3.4 behavior). The
+    ``pydev_do_not_trace`` / ``is_pydev_daemon_thread`` markers set here are
+    pydevd/debugpy conventions and are inert unless a debugger is attached, so
+    tracing costs nothing outside a debug session.
+
     Args:
         name: Name assigned to the background thread, visible in stack traces.
         uvify: Passed through to :func:`_new_event_loop`.
@@ -141,8 +150,16 @@ def get_threaded_loop(
 
     th = threading.Thread(target=run_threaded_event_loop, args=(newloop,), name=name)
 
-    th.pydev_do_not_trace = os.getenv("KOIL_DO_TRACE", "0") == "0"
-    th.is_pydev_daemon_thread = os.getenv("KOIL_DO_TRACE", "0") == "0"
+    # Hide the loop thread from the debugger only when KOIL_DO_TRACE is set to a
+    # falsy value; otherwise trace it so coroutine breakpoints work by default.
+    hide_from_debugger = os.environ.get("KOIL_DO_TRACE", "").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    th.pydev_do_not_trace = hide_from_debugger
+    th.is_pydev_daemon_thread = hide_from_debugger
     th.daemon = True
     th.start()
 

@@ -137,6 +137,31 @@ Exceptions raised by koil itself (e.g. a cancellation timeout) keep their full t
 - per instance: `Koil(rewrite_tracebacks=False)`;
 - process-wide, without touching code: set the environment variable `KOIL_FULL_TRACEBACK=1` (this wins over everything — the escape hatch when debugging koil itself).
 
+### Stepping through koil with a debugger
+
+Because koil runs your async code on a background loop thread, it's worth knowing where a step debugger (VSCode's Python debugger, PyCharm — both are pydevd/debugpy under the hood) can and can't stop. A nested `run_threaded` cascade spans several threads:
+
+| Where your code runs | Thread | Breakpoints hit? |
+| --- | --- | --- |
+| Sync call sites (before/after `unkoil`) | main thread | Yes |
+| `run_threaded` / `iterate_threaded` worker bodies | `ThreadPoolExecutor` pool thread | Yes |
+| Coroutines on the loop (the async "glue" that `unkoil`/`await run_threaded` runs) | background loop thread | **Yes, by default** |
+
+So a breakpoint anywhere in the cascade — inside a `run_threaded` worker *or* inside the coroutine that calls it — is hit. 
+Two things to keep in mind:
+
+- **You can't *step across* a thread hop.** From a coroutine you can't `F11`-step *into* `run_threaded(worker)` and land inside `worker` (and vice-versa) — debuggers don't follow stepping across threads. Set a breakpoint at the target instead; it fires when that thread arrives there.
+- **Opt out with `KOIL_DO_TRACE=0`.** If you'd rather hide the loop thread from the debugger (e.g. to avoid stepping through asyncio internals), set the environment variable `KOIL_DO_TRACE` to a falsy value (`0`/`false`/`no`/`off`). Then breakpoints in loop-thread coroutines are skipped again, while `run_threaded` worker breakpoints keep working. In a VSCode `launch.json`:
+
+  ```jsonc
+  {
+    "configurations": [
+      { "name": "app", "type": "debugpy", "request": "launch", "program": "app.py",
+        "env": { "KOIL_DO_TRACE": "0" } }
+    ]
+  }
+  ```
+
 ### One thread, many calls
 
 The background loop thread is created **once** when you enter the `Koil` context. Every subsequent `unkoil`, `unkoil_gen`, or `unkoil_task` call posts a coroutine to that existing thread via `asyncio.run_coroutine_threadsafe` — no new threads are spawned per call. The calling thread blocks on a `concurrent.futures.Future` until the result arrives; the loop thread continues processing other tasks in the meantime.
