@@ -199,3 +199,27 @@ def test_koilable_enter_failure_tears_down_koil():
     auto_koil = getattr(m, "__koil", None)
     assert auto_koil is not None
     assert auto_koil.running is False
+
+
+def test_koilable_exit_failure_tears_down_koil():
+    """A failing __aexit__ must still tear the auto-started Koil down —
+    previously the loop thread leaked because koil.__exit__ was skipped."""
+
+    @koilable()
+    class FailsOnExit:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            raise ValueError("teardown boom")
+
+    m = FailsOnExit()
+    with pytest.raises(ValueError, match="teardown boom"):
+        with m:
+            pass
+
+    assert global_koil.get() is None
+    auto_koil = getattr(m, "__koil", None)
+    assert auto_koil is not None
+    assert auto_koil.running is False
+    assert auto_koil._loop is None  # loop actually stopped, not just flagged

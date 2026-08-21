@@ -1,7 +1,7 @@
 from types import TracebackType
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 from koil.decorators import koilable
-from typing import Optional, Self, TypeVar
+from typing import Any, Optional, Self, TypeVar
 from koil.loop import Koil
 
 T = TypeVar("T")
@@ -52,16 +52,26 @@ class Composition(KoiledModel):
     This is useful for creating a single Koil model that can be used to
     manage multiple other Koil models, all models will share the same Koil instance.
 
-
+    Children are entered in declaration order and exited in **reverse**
+    order (later children may depend on earlier ones). If entering a child
+    fails, the children already entered are exited (in reverse) before the
+    error propagates; if a child's exit fails, the remaining children are
+    still exited and the first exit error is re-raised afterwards.
     """
 
     async def __aenter__(self) -> Self:
         await super().__aenter__()
+        entered: list[Any] = []
         for _, value in self:
             if isinstance(value, Koil):
                 continue  # that was entered before
             if hasattr(value, "__aenter__"):
-                await value.__aenter__()
+                try:
+                    await value.__aenter__()
+                except BaseException:
+                    await self._aexit_children(entered, None, None, None)
+                    raise
+                entered.append(value)
         return self
 
     async def __aexit__(
@@ -71,8 +81,28 @@ class Composition(KoiledModel):
         exc_tb: TracebackType | None,
     ) -> None:
         await super().__aexit__(exc_type, exc_val, exc_tb)
-        for _, value in self:
-            if isinstance(value, Koil):
-                continue  # that was entered before
-            if hasattr(value, "__aexit__"):
+        entered = [
+            value
+            for _, value in self
+            if not isinstance(value, Koil) and hasattr(value, "__aexit__")
+        ]
+        await self._aexit_children(entered, exc_type, exc_val, exc_tb)
+
+    @staticmethod
+    async def _aexit_children(
+        entered: "list[Any]",
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exit *entered* children in reverse order, exiting every child even
+        when one of them raises; the first error is re-raised at the end."""
+        first_error: BaseException | None = None
+        for value in reversed(entered):
+            try:
                 await value.__aexit__(exc_type, exc_val, exc_tb)
+            except BaseException as e:
+                if first_error is None:
+                    first_error = e
+        if first_error is not None:
+            raise first_error

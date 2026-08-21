@@ -4,7 +4,7 @@ import time
 import pytest
 
 from koil.composition.base import KoiledModel
-from koil.errors import KoilError, ThreadCancelledError
+from koil.errors import ThreadCancelledError
 from koil.bridge import iterate_threaded, run_threaded, sleep
 from koil.loop import Koil
 from koil.context import check_cancelled, current_cancel_event, global_koil
@@ -99,7 +99,9 @@ async def test_sleep_raises_thread_cancelled_error_on_cancel():
 
 @pytest.mark.timeout(10)
 async def test_run_spawned_cancel_timeout():
-    """A non-cooperative thread causes KoilError after cancel_timeout expires."""
+    """A non-cooperative thread is abandoned after cancel_timeout expires and
+    CancelledError still propagates (it is never converted into KoilError —
+    that would break structured cancellation)."""
     blocker = threading.Event()
 
     k = Koil()
@@ -110,14 +112,12 @@ async def test_run_spawned_cancel_timeout():
         task = asyncio.create_task(run_threaded(blocker.wait))
         await asyncio.sleep(0.01)
         task.cancel()
-        with pytest.raises((KoilError, asyncio.CancelledError)):
-            # KoilError when thread doesn't cooperate within cancel_timeout;
-            # CancelledError if the executor future is cancelled before the timeout fires.
+        with pytest.raises(asyncio.CancelledError):
             await task
     finally:
         global_koil.reset(token)
         blocker.set()  # unblock the background thread so it can finish
-        await asyncio.sleep(0)  # yield so the executor can clean up
+        await asyncio.sleep(0)  # yield so the worker can clean up
 
 
 @pytest.mark.timeout(10)
@@ -133,7 +133,7 @@ async def test_cancel_timeout_constructor_kwarg():
         task = asyncio.create_task(run_threaded(blocker.wait))
         await asyncio.sleep(0.01)
         task.cancel()
-        with pytest.raises((KoilError, asyncio.CancelledError)):
+        with pytest.raises(asyncio.CancelledError):
             await task
     finally:
         global_koil.reset(token)

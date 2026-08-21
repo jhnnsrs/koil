@@ -143,10 +143,14 @@ def koilable(
             exc_tb: TracebackType | None,
         ):
             __tracebackhide__ = True
-            unkoil(self.__aexit__, exc_type, exc_val, exc_tb)
-            koil = getattr(self, fieldname, None)
-            if koil is not None:
-                koil.__exit__(None, None, None)
+            try:
+                unkoil(self.__aexit__, exc_type, exc_val, exc_tb)
+            finally:
+                # Tear the Koil (and its loop thread) down even when
+                # __aexit__ raises — otherwise the thread leaks.
+                koil = getattr(self, fieldname, None)
+                if koil is not None:
+                    koil.__exit__(None, None, None)
 
         def koiled_param_exit(self: Koilable):
             koiled_exit(self, None, None, None)

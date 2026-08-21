@@ -168,7 +168,7 @@ The background loop thread is created **once** when you enter the `Koil` context
 
 This matters in practice. Calling `unkoil` a thousand times inside a `with Koil():` block creates one thread total, not a thousand. Multiple `@koilable` objects entered inside the same `Koil` context all share that single loop thread too.
 
-The only functions that touch the thread pool are `run_threaded` and `iterate_threaded`, and only because they genuinely need to run blocking sync code without stalling the loop. Even then, they reuse Python's default `ThreadPoolExecutor` — no new thread is started if a pool thread is available.
+The only functions that start additional threads are `run_threaded` and `iterate_threaded`, and only because they genuinely need to run blocking sync code without stalling the loop. Each call runs on a fresh, short-lived **daemon** worker thread rather than Python's default `ThreadPoolExecutor`: pool workers are non-daemon threads that the interpreter joins at shutdown (so a wedged worker would block process exit), and a bounded pool can deadlock when workers re-enter the bridge (`unkoil` → `run_threaded`). Thread startup costs microseconds next to the bridging overhead already paid per call.
 
 This is in contrast to libraries like asgiref's `async_to_sync`, which creates (or reuses per-thread) a fresh event loop for each blocking call site, or frameworks that spin up a new executor thread per bridged call. koil's model scales to high call frequencies with minimal threading overhead.
 

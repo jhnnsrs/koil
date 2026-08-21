@@ -7,8 +7,8 @@ the background asyncio event loop managed by :class:`~koil.loop.Koil`:
 * :func:`unkoil_gen` — drive an async generator as a synchronous generator.
 * :func:`unkoil_task` — submit a coroutine without blocking; returns a
   :class:`~koil.utils.KoilFuture`.
-* :func:`run_threaded` — run synchronous code on a thread pool from inside
-  async code, with copy-in koil context propagation and cooperative
+* :func:`run_threaded` — run synchronous code on a daemon worker thread from
+  inside async code, with copy-in koil context propagation and cooperative
   cancellation. :func:`run_threaded_bridged` is the bidirectional variant.
 * :func:`iterate_threaded` — drive a synchronous generator from async code
   one step at a time via :func:`run_threaded`.
@@ -20,6 +20,7 @@ the background asyncio event loop managed by :class:`~koil.loop.Koil`:
 import asyncio
 import concurrent.futures
 import inspect
+import itertools
 import threading
 import time
 
@@ -138,10 +139,16 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
 def sleep(seconds: float, event_wait_time: float = 0.1) -> None:
     """Sleep for *seconds* in a way that cooperates with koil cancellation.
 
-    When called from inside a koil worker thread, the sleep is implemented via
-    a loop callback so it does not block the event loop, and is interrupted
-    immediately if the task's cancel event fires.  When called outside any koil
-    context the function falls back to :func:`time.sleep`.
+    When called from inside a koil worker thread (i.e. with an ambient cancel
+    event), the sleep is performed in short slices and is interrupted as soon
+    as the task's cancel event fires.  When there is no cancel event to watch
+    the function falls back to a plain :func:`time.sleep`.
+
+    The sleep runs entirely on the calling thread: the koil event loop is not
+    involved.  (An earlier implementation scheduled a wake-up timer on the
+    loop via ``call_later`` from this foreign thread — ``call_later`` is not
+    thread-safe, and the timer also could not wake a wedged loop, so the timer
+    has been dropped in favour of a plain monotonic deadline.)
 
     Args:
         seconds: Duration to sleep.
@@ -150,25 +157,21 @@ def sleep(seconds: float, event_wait_time: float = 0.1) -> None:
             cost of slightly more CPU usage.
 
     Raises:
-        ThreadCancelledError: If the task is cancelled while sleeping.
+        ThreadCancelledError: If the task is cancelled while sleeping (or was
+            already cancelled when the sleep started).
     """
-    try:
-        koil_loop = get_koiled_loop_or_raise()
-    except KoilError:
+    cancel_event = current_cancel_event.get()
+    if cancel_event is None:
         return time.sleep(seconds)
 
-    event = threading.Event()
-
-    def timer_callback() -> None:
-        event.set()
-
-    koil_loop.call_later(seconds, timer_callback)
-
-    while not event.is_set():
-        event.wait(timeout=event_wait_time)
-        cancel_event = current_cancel_event.get()
-        if cancel_event and cancel_event.is_set():
+    deadline = time.monotonic() + seconds
+    while True:
+        if cancel_event.is_set():
             raise ThreadCancelledError("Sleep was cancelled")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(event_wait_time, remaining))
 
 
 def unkoil_gen(
@@ -219,8 +222,9 @@ def unkoil_gen(
             if send_val is None:
                 future = run_async_sharing_context(ait.__anext__, koil_loop, None, None)
             else:
+                # __anext__ takes no arguments; sent values go through asend().
                 future = run_async_sharing_context(
-                    ait.__anext__, koil_loop, None, None, send_val
+                    ait.asend, koil_loop, None, None, send_val
                 )  # type: ignore
 
             try:
@@ -297,8 +301,9 @@ def unkoil_gen_with_timeout(
                     ait.__anext__, koil_loop, None, timeout
                 )
             else:
+                # __anext__ takes no arguments; sent values go through asend().
                 future = run_async_sharing_context(
-                    ait.__anext__, koil_loop, None, timeout, send_val
+                    ait.asend, koil_loop, None, timeout, send_val
                 )  # type: ignore
 
             try:
@@ -514,6 +519,52 @@ def unkoil_task_with_timeout(
 
 S = TypeVar("S")
 
+_worker_count = itertools.count(1)
+
+
+def _run_in_daemon_thread(
+    func: Callable[..., R], *args: Any
+) -> concurrent.futures.Future[R]:
+    """Run *func* on a fresh daemon thread; return a future for its result.
+
+    This deliberately does NOT use the loop's default executor
+    (``ThreadPoolExecutor``), for two safety reasons:
+
+    * ``ThreadPoolExecutor`` workers are non-daemon threads that the
+      interpreter joins at shutdown. A koil worker wedged on uncancellable
+      work would therefore block process exit — even after ``Koil.__exit__``
+      abandoned it — defeating the daemon-loop-thread shutdown guarantee.
+      Daemon threads are simply killed at interpreter exit.
+    * The pool's bounded size (``min(32, cpus + 4)``) can deadlock under
+      nesting: a worker that re-enters the bridge (``unkoil`` →
+      ``run_threaded``) needs a second pool slot while holding its first, so
+      enough concurrent nesting exhausts the pool with every thread waiting
+      on a slot that can never free up. A fresh thread per call cannot
+      deadlock this way.
+
+    Thread creation is cheap (tens of microseconds) next to the bridging
+    overhead already paid per call (context copy plus loop submission).
+    """
+    future: concurrent.futures.Future[R] = concurrent.futures.Future()
+
+    def runner() -> None:
+        __tracebackhide__ = True  # transport frame, pruned at the bridges
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(func(*args))
+        except BaseException as e:
+            future.set_exception(e)
+
+    thread = threading.Thread(
+        target=runner,
+        name=f"koil-worker-{next(_worker_count)}",
+        daemon=True,
+    )
+    thread.start()
+    return future
+
+
 # ContextVars that run_threaded sets on the worker thread for koil's own
 # bookkeeping. They must never be bridged back into the caller's context: the
 # loop/koil references are already correct there, and the cancel event is
@@ -551,11 +602,12 @@ async def _run_threaded(
     *,
     bridge: bool,
 ) -> R:
-    """Shared implementation behind :func:`run_threaded` / :func:`run_threaded_isolated`.
+    """Shared implementation behind :func:`run_threaded` / :func:`run_threaded_bridged`.
 
-    Submits *sync_func* to ``loop.run_in_executor`` with koil context, cancel-event
-    setup, and the caller's :class:`~contextvars.Context` copied in. When *bridge* is
-    true, ContextVars the worker mutated are copied back out into the caller's context
+    Runs *sync_func* on a fresh daemon worker thread (see
+    :func:`_run_in_daemon_thread`) with koil context, cancel-event setup, and the
+    caller's :class:`~contextvars.Context` copied in. When *bridge* is true,
+    ContextVars the worker mutated are copied back out into the caller's context
     on successful completion (skipping koil-internal vars).
     """
     __tracebackhide__ = True
@@ -570,9 +622,10 @@ async def _run_threaded(
         __tracebackhide__ = True
 
         # Run the body *inside* the copied context via Context.run instead of
-        # mutating the executor thread's own context with bare .set() calls.
-        # run_in_executor reuses pooled threads, so leftover contextvars would
-        # otherwise leak into the next, unrelated task scheduled on that thread.
+        # mutating the worker thread's own context with bare .set() calls: the
+        # bridged variants read the mutated copy back out after the run, and
+        # keeping the thread's own context pristine stays correct even if the
+        # execution strategy ever returns to pooled (reused) threads.
         def body() -> R:
             __tracebackhide__ = True
             global_koil.set(koil)
@@ -595,12 +648,10 @@ async def _run_threaded(
     # is_set() (a plain bool read); we set() it from the loop on cancellation.
     cancel_event = KoilThreadSafeEvent(loop)
 
-    future = loop.run_in_executor(
-        None,
-        wrapper,
-        cancel_event,
-        worker_context,
-    )  # type: ignore
+    future = asyncio.wrap_future(
+        _run_in_daemon_thread(wrapper, cancel_event, worker_context),
+        loop=loop,
+    )
     try:
         shielded_f = await asyncio.shield(future)
     except asyncio.CancelledError as e:
@@ -610,10 +661,30 @@ async def _run_threaded(
             await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 10)
         except ThreadCancelledError:
             logging.info("Future in another thread was successfully cancelled")
-        except asyncio.TimeoutError as te:
-            raise KoilError(
-                f"We could not successfully cancel the future {future} in another thread. Make sure you are not blocking the thread with a long running task and check if you call check_cancelled periodically."
-            ) from te
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            # The worker did not acknowledge the cancellation in time. Do NOT
+            # convert the cancellation into a different exception: swallowing
+            # CancelledError breaks structured-concurrency invariants
+            # (asyncio.timeout / TaskGroup rely on it propagating). The worker
+            # keeps running on its daemon thread — warn so the abandonment is
+            # visible — and the CancelledError is re-raised below.
+            logging.warning(
+                "A cancelled run_threaded worker did not acknowledge "
+                "cancellation within %.1fs and has been abandoned on its "
+                "daemon thread. Make sure the threaded function calls "
+                "check_cancelled() periodically.",
+                koil.cancel_timeout if koil else 10,
+            )
+        except Exception:
+            # The worker raised something else while unwinding. The caller was
+            # cancelled, so CancelledError must still propagate; surface the
+            # worker's error in the log instead of replacing the cancellation.
+            logging.warning(
+                "A cancelled run_threaded worker raised while unwinding",
+                exc_info=True,
+            )
 
         raise e
 
@@ -630,9 +701,13 @@ async def run_threaded(
     *sync_args: P.args,
     **sync_kwargs: P.kwargs,
 ) -> R:
-    """Run a synchronous function on the default thread pool with koil context.
+    """Run a synchronous function on a koil worker thread with koil context.
 
-    Submits *sync_func* to ``loop.run_in_executor`` and awaits the result.
+    Runs *sync_func* on a fresh daemon worker thread and awaits the result.
+    (A dedicated daemon thread rather than the loop's default executor: pool
+    workers are non-daemon threads that would block interpreter exit if the
+    function wedged, and a bounded pool can deadlock under bridge nesting —
+    see :func:`_run_in_daemon_thread`.)
     Before calling the function, the worker thread is set up with:
 
     * The caller's :class:`contextvars.Context` (copied via
@@ -652,10 +727,13 @@ async def run_threaded(
     If the awaiting coroutine is cancelled, the cancel event is set and the
     function waits for the worker to finish (up to
     :attr:`~koil.loop.Koil.cancel_timeout` seconds) before re-raising
-    :class:`asyncio.CancelledError`.
+    :class:`asyncio.CancelledError`. A worker that does not acknowledge within
+    that grace is abandoned on its daemon thread (with a logged warning) and
+    :class:`asyncio.CancelledError` still propagates, so structured
+    cancellation (``asyncio.timeout``, ``TaskGroup``) keeps working.
 
     Args:
-        sync_func: A synchronous callable to run on the thread pool.
+        sync_func: A synchronous callable to run on a worker thread.
         *sync_args: Positional arguments forwarded to *sync_func*.
         **sync_kwargs: Keyword arguments forwarded to *sync_func*.
 
@@ -663,10 +741,7 @@ async def run_threaded(
         The return value of *sync_func*.
 
     Raises:
-        asyncio.CancelledError: If the caller's coroutine is cancelled and the
-            worker thread acknowledges the cancel within the timeout.
-        KoilError: If the worker thread does not finish within the cancel
-            timeout.
+        asyncio.CancelledError: If the caller's coroutine is cancelled.
     """
     try:
         return await _run_threaded(sync_func, sync_args, sync_kwargs, bridge=False)
@@ -783,7 +858,7 @@ def iterate_threaded(
 
     .. note::
        Because each step runs in a fresh :func:`run_threaded` call, consecutive
-       steps may land on different pooled threads. Generators that hold a
+       steps run on different worker threads. Generators that hold a
        thread-affine resource (e.g. an ``RLock``) across a ``yield`` will not see
        single-thread behaviour.
 

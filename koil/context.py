@@ -6,6 +6,7 @@ it runs on, and the per-task cancellation event injected by
 :func:`~koil.bridge.run_threaded`.
 """
 import contextvars
+import threading
 from koil.errors import ThreadCancelledError
 from typing import Optional, Protocol
 import asyncio
@@ -38,8 +39,13 @@ class KoilThreadSafeEvent(asyncio.Event):
     thread-safe to mutate from outside its loop, so :meth:`set` and :meth:`clear`
     are routed through ``loop.call_soon_threadsafe``.
 
-    :meth:`asyncio.Event.is_set` (a plain bool read) is left unchanged and is
-    used by cooperative sync consumers such as :func:`check_cancelled`.
+    Sync consumers (:func:`check_cancelled` in worker threads) poll
+    :meth:`is_set`. Because the async side of :meth:`set` only lands once the
+    loop runs the scheduled callback, a plain ``asyncio.Event`` read would go
+    blind exactly when it matters most — when the loop is wedged and workers
+    need cancelling. A mirrored :class:`threading.Event` is therefore flipped
+    *immediately* on the calling thread, and :meth:`is_set` consults it first,
+    so cooperative cancellation stays visible even while the loop is blocked.
 
     The loop is bound at construction time so that :meth:`set`/:meth:`clear`
     always target the right koil loop, even when called from a thread that has
@@ -49,14 +55,29 @@ class KoilThreadSafeEvent(asyncio.Event):
     def __init__(self, koil_loop: asyncio.AbstractEventLoop) -> None:
         super().__init__()
         self._loop = koil_loop
+        self._sync_flag = threading.Event()
 
     def set(self) -> None:
-        """Schedule ``asyncio.Event.set`` on the koil loop (thread-safe)."""
+        """Set the event (thread-safe).
+
+        The sync mirror is flipped immediately (so worker-side ``is_set()``
+        polls see the cancellation at once); the asyncio side is scheduled on
+        the koil loop for any coroutine awaiting :meth:`wait`. The mirror is
+        set *before* the cross-thread call so that even if the loop is already
+        closed (``call_soon_threadsafe`` raising :class:`RuntimeError`),
+        workers still observe the cancellation.
+        """
+        self._sync_flag.set()
         self._loop.call_soon_threadsafe(super().set)
 
     def clear(self) -> None:
-        """Schedule ``asyncio.Event.clear`` on the koil loop (thread-safe)."""
+        """Clear the event (thread-safe)."""
+        self._sync_flag.clear()
         self._loop.call_soon_threadsafe(super().clear)
+
+    def is_set(self) -> bool:
+        """True if set via :meth:`set` or on the asyncio side directly."""
+        return self._sync_flag.is_set() or super().is_set()
 
 
 global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextVar(

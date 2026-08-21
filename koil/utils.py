@@ -160,17 +160,22 @@ def aclose_async_gen_threadsafe(
         close_future = asyncio.run_coroutine_threadsafe(aclose(), loop)
     except RuntimeError:
         # Loop stopped/closed between the is_closed() check and submission;
-        # nothing left to close.
+        # nothing left to close. Anything else is a real error — re-raise.
+        if not loop.is_closed():
+            raise
         return
 
     try:
         close_future.result(timeout=ACLOSE_TIMEOUT if timeout is None else timeout)
-    except RuntimeError:
+    except RuntimeError as e:
         # "aclose(): asynchronous generator is already running" — another
         # teardown path (a cancelled __anext__ unwinding, or the loop's
         # shutdown_asyncgens) is already closing this generator. Its finally
-        # still runs exactly once; nothing to do here.
-        pass
+        # still runs exactly once; nothing to do here. Only that specific
+        # race is benign: a RuntimeError raised by the generator's own
+        # cleanup code must not be silently swallowed.
+        if "asynchronous generator is already running" not in str(e):
+            raise
     except (CancelledError, concurrent.futures.CancelledError):
         pass
     except concurrent.futures.TimeoutError:
@@ -308,7 +313,8 @@ class _KoilFutureBase(Generic[T]):
         Raises:
             KoilTimeoutError: If *timeout* elapses before the task completes.
             ValueError: If *timeout* is negative.
-            CancelledError: If the task was cancelled.
+            asyncio.CancelledError: If the task was cancelled (on Python 3.8+
+                this is the same class as ``concurrent.futures.CancelledError``).
             KeyboardInterrupt: If the caller is interrupted while waiting. The
                 in-flight task is *signalled* to cancel (cooperatively) before
                 the interrupt is re-raised; it is not joined, so it may still be
@@ -712,7 +718,10 @@ def iterate_async_sharing_context(
 
             raise timeout_error
 
-        error = CancelledError("Future was cancelled")
+        # A cancel event won the race. asyncio.CancelledError — the same type
+        # run_async_sharing_context raises — so callers see one cancellation
+        # type regardless of which bridge primitive was used.
+        error = asyncio.CancelledError("Future was cancelled")
 
         if signals:
             signals.cancelled.emit(error)

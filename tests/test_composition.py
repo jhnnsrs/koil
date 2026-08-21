@@ -1,3 +1,5 @@
+from typing import Any
+
 from koil.composition import Composition
 import asyncio
 from pydantic import Field
@@ -85,3 +87,84 @@ def test_multiple_contexts():
             assert app.kant.connected, "kant should be connected"
             assert app.tan.run() == 4, "tan.x should be 4 because it was set in enter"
     
+
+class _Recorder(KoiledModel):
+    """Child that records enter/exit events into a shared journal."""
+
+    name: str
+    journal: Any
+    fail_on_enter: bool = False
+    fail_on_exit: bool = False
+
+    async def __aenter__(self):
+        if self.fail_on_enter:
+            raise RuntimeError(f"{self.name} failed to enter")
+        self.journal.append(("enter", self.name))
+        return self
+
+    async def __aexit__(self, *args, **kwargs):
+        self.journal.append(("exit", self.name))
+        if self.fail_on_exit:
+            raise RuntimeError(f"{self.name} failed to exit")
+
+
+class _RecorderApp(Composition):
+    a: _Recorder
+    b: _Recorder
+    c: _Recorder
+
+
+async def test_composition_exits_in_reverse_order():
+    journal: list = []
+    app = _RecorderApp(
+        a=_Recorder(name="a", journal=journal),
+        b=_Recorder(name="b", journal=journal),
+        c=_Recorder(name="c", journal=journal),
+    )
+    async with app:
+        pass
+    assert journal == [
+        ("enter", "a"),
+        ("enter", "b"),
+        ("enter", "c"),
+        ("exit", "c"),
+        ("exit", "b"),
+        ("exit", "a"),
+    ]
+
+
+async def test_composition_failed_enter_unwinds_entered_children():
+    journal: list = []
+    app = _RecorderApp(
+        a=_Recorder(name="a", journal=journal),
+        b=_Recorder(name="b", journal=journal, fail_on_enter=True),
+        c=_Recorder(name="c", journal=journal),
+    )
+    import pytest
+
+    with pytest.raises(RuntimeError, match="b failed to enter"):
+        async with app:
+            pass
+    # a was entered before b failed, and must have been exited again;
+    # c was never entered so never exited.
+    assert journal == [("enter", "a"), ("exit", "a")]
+
+
+async def test_composition_failing_exit_still_exits_remaining_children():
+    journal: list = []
+    app = _RecorderApp(
+        a=_Recorder(name="a", journal=journal),
+        b=_Recorder(name="b", journal=journal, fail_on_exit=True),
+        c=_Recorder(name="c", journal=journal),
+    )
+    import pytest
+
+    with pytest.raises(RuntimeError, match="b failed to exit"):
+        async with app:
+            pass
+    # All three exits ran (reverse order) even though b's exit raised.
+    assert [e for e in journal if e[0] == "exit"] == [
+        ("exit", "c"),
+        ("exit", "b"),
+        ("exit", "a"),
+    ]

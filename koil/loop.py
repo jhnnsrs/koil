@@ -5,11 +5,12 @@ dedicated asyncio event loop on a background thread so that async code can be
 called from synchronous call sites via :mod:`koil.bridge`.
 """
 import asyncio
+import contextvars
 import os
 import sys
 import threading
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Any, Dict, List, Optional, Protocol, Self, Tuple
 from koil.context import global_koil, global_koil_loop
 from koil.errors import ContextError
 import logging
@@ -175,9 +176,16 @@ class Koil:
     (``unkoil``, ``run_threaded``, etc.) use this loop to execute async code
     without blocking the calling thread.
 
-    Entering a ``Koil`` inside an already-running asyncio loop is allowed when
-    *sync_in_async* is ``True`` (the default); the existing loop is reused and
-    no new thread is spawned.
+    Entering a ``Koil`` (with the sync ``with`` syntax) inside an
+    already-running asyncio loop is allowed when *sync_in_async* is ``True``
+    (the default): a background koil loop is still started, and sync bridge
+    calls will block the calling (async) thread while work runs on it. Set
+    ``sync_in_async=False`` to make that a :class:`~koil.errors.ContextError`
+    instead.
+
+    Re-entering the same instance (nested ``with`` blocks, or from several
+    threads) is safe: one loop is started, every enter gets ambient access to
+    it, and only the enter that started the loop stops it on exit.
 
     Example::
 
@@ -199,6 +207,23 @@ class Koil:
     ) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
+        #: True only when this instance *created* self._loop (sync __enter__).
+        #: An async-captured loop (``async with``) is never owned and must
+        #: never be stopped by this instance.
+        self._owns_loop = False
+        #: Guards loop creation when the same instance is entered from
+        #: several threads at once: exactly one thread starts the loop, the
+        #: others reuse it.
+        self._creation_lock = threading.Lock()
+        #: Per-thread stack of enter records, so nested ``with`` blocks on the
+        #: *same* instance pair up: only the enter that started the loop tears
+        #: it down, and each exit resets exactly the ContextVar tokens its
+        #: matching enter set.
+        self._sync_entries = threading.local()
+        #: Tokens set by __aenter__, reset LIFO by __aexit__.
+        self._async_tokens: List[
+            Tuple[contextvars.Token[Any], contextvars.Token[Any]]
+        ] = []
         self.running = False
         self.sync_in_async = sync_in_async
         self.uvify = uvify
@@ -237,13 +262,41 @@ class Koil:
             raise RuntimeError("Loop is not running. This should not happen")
         return self._loop
 
+    def _sync_entry_stack(self) -> List[Dict[str, Any]]:
+        stack = getattr(self._sync_entries, "stack", None)
+        if stack is None:
+            stack = []
+            self._sync_entries.stack = stack
+        return stack
+
+    @staticmethod
+    def _reset_token(
+        var: contextvars.ContextVar[Any], token: Optional[contextvars.Token[Any]]
+    ) -> None:
+        """Reset *var* via *token*, falling back to clearing it when the token
+        belongs to a different context (an enter/exit pair split across
+        contexts, e.g. via ``Context.run``)."""
+        if token is None:
+            return
+        try:
+            var.reset(token)
+        except ValueError:
+            var.set(None)
+
     async def __aenter__(self) -> "Koil":
         try:
-            self._loop = asyncio.get_running_loop()
-            global_koil_loop.set(self._loop)
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass
+            return self
 
+        self._loop = loop
+        # Set BOTH ambient vars (the old implementation set only the loop,
+        # yet cleared only the koil on exit): worker threads spawned from this
+        # loop resolve sync_in_async / cancel_timeout through global_koil, and
+        # the tokens let __aexit__ restore whatever was ambient before.
+        self._async_tokens.append(
+            (global_koil.set(self), global_koil_loop.set(loop))
+        )
         return self
 
     async def __aexit__(
@@ -252,7 +305,14 @@ class Koil:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        global_koil.set(None)  # type: ignore[assignment]
+        if self._async_tokens:
+            koil_token, loop_token = self._async_tokens.pop()
+            self._reset_token(global_koil, koil_token)
+            self._reset_token(global_koil_loop, loop_token)
+        if not self._async_tokens and not self._owns_loop:
+            # Drop the captured (never owned) loop reference so a later sync
+            # __exit__ cannot mistake the user's loop for one to stop.
+            self._loop = None
         return None
 
     def __enter__(self) -> "Koil":
@@ -268,19 +328,29 @@ class Koil:
         except RuntimeError:
             pass
 
-        koil = global_koil.get()  # type: ignore[assignment]
+        entry: Dict[str, Any] = {
+            "started_loop": False,
+            "koil_token": None,
+            "loop_token": None,
+        }
 
-        if koil is None:
-            self._loop, self._loop_thread = get_threaded_loop(
-                getattr(
-                    self,
-                    "name",
-                    f"KoiledLoop {'governed by' + self.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
-                ),
-                uvify=getattr(self, "uvify", True),
-            )
-            global_koil.set(self)
-            global_koil_loop.set(self._loop)
+        if global_koil.get() is None:
+            with self._creation_lock:
+                if self._loop is None:
+                    self._loop, self._loop_thread = get_threaded_loop(
+                        getattr(
+                            self,
+                            "name",
+                            f"KoiledLoop {'governed by' + self.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
+                        ),
+                        uvify=getattr(self, "uvify", True),
+                    )
+                    self._owns_loop = True
+                    entry["started_loop"] = True
+            entry["koil_token"] = global_koil.set(self)
+            entry["loop_token"] = global_koil_loop.set(self._loop)
+
+        self._sync_entry_stack().append(entry)
         self.running = True
         return self
 
@@ -290,7 +360,22 @@ class Koil:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._loop:
+        stack = self._sync_entry_stack()
+        if stack:
+            entry = stack.pop()
+            self._reset_token(global_koil, entry["koil_token"])
+            self._reset_token(global_koil_loop, entry["loop_token"])
+        else:
+            # Unmatched exit — e.g. called directly from a thread that never
+            # entered (a Qt close handler on another thread). Fall back to
+            # tearing down the loop if this instance owns one, clearing the
+            # ambient vars in this context like the pre-token implementation.
+            entry = {"started_loop": self._owns_loop and self._loop is not None}
+            if entry["started_loop"]:
+                global_koil.set(None)
+                global_koil_loop.set(None)
+
+        if entry["started_loop"] and self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
             if self._loop_thread is not None:
@@ -338,7 +423,6 @@ class Koil:
             # Drop the reference so a second __exit__ doesn't call
             # call_soon_threadsafe(stop) on an already-closed loop.
             self._loop = None
-            global_koil.set(None)
-            global_koil_loop.set(None)
+            self._owns_loop = False
 
-        self.running = False
+        self.running = bool(stack)

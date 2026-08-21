@@ -171,6 +171,7 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
         self.task_was_run = False
         self.coroutine_was_run = False
         self.coroutine_finished = False
+        self.collected: list[int] = []
 
         self.call_task_button = QtWidgets.QPushButton("Call Task")
         self.greet_label = QtWidgets.QLabel("")
@@ -190,6 +191,8 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
     def iterator(self, iterator: QtGenerator[int], number: int = 5):
         for i in range(number):
             iterator.next(i)
+        # The stream only ends when the producer says so.
+        iterator.stop()
 
     def call_task(self):
         self._task = self.my_coro.run()
@@ -199,7 +202,7 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
 
     async def acall_coro(self) -> None:
         async for x in self.qt_generator.acall(number=3):
-            print(x)
+            self.collected.append(x)
 
 
 
@@ -245,6 +248,20 @@ def test_call_gen(qtbot: QtBot ):
         widget.sleep_and_yield_task,
         lambda qtbot: qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton), # type: ignore
     )
+
+
+@pytest.mark.qt
+def test_qt_generator_bridge(qtbot: QtBot):
+    """qt_gen_to_async_gen delivers every produced value exactly once and
+    finishes when the producer calls stop()."""
+    widget = KoiledGeneratorWidget()
+    qtbot.addWidget(widget)  # type: ignore
+
+    with qtbot.waitSignal(widget.my_coro.returned, timeout=1000):  # type: ignore
+        qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton)  # type: ignore
+
+    assert widget.collected == [0, 1, 2]
+    assert widget.greet_label.text() == "Hello!"
 
 
 @pytest.mark.qt

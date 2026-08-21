@@ -147,42 +147,53 @@ P = ParamSpec("P")
 
 
 class QtGenerator(QtCore.QObject, Generic[T]):
-    """A generator that can be run in the Qt event loop
+    """A generator that can be driven from the Qt event loop.
 
-    Qt Generators are generators that can be run in the Qt event loop. They are
-    useful for functions that need to be run in the Qt event loop and are not
-    compatible with the asyncio event loop.
+    The producer side (a Qt slot running on the Qt main thread) pushes values
+    with :meth:`next`, signals an error with :meth:`throw`, and MUST finish the
+    stream with :meth:`stop` — the consuming ``async for`` completes only when
+    ``stop()`` (or ``throw()``) is seen. The consumer side is the async
+    generator returned by :meth:`qt_gen_to_async_gen.acall`.
+
+    Items travel through an unbounded :class:`asyncio.Queue` (fed via
+    ``call_soon_threadsafe``), so the producer may push any number of values,
+    at any pace, before or while the consumer catches up. An earlier
+    implementation resolved a single ``asyncio.Future`` per generator, which
+    both lost every value after the first (``InvalidStateError`` on the second
+    ``set_result``) and made the consumer re-await the same completed future
+    forever.
 
     Qt Generators are generic and should be passed the type of the yield value
     when creating the generator. This is useful for type hinting and for the
     generator to know what type of value to expect when it is yielded.
-
     """
 
     def __init__(self):
         super().__init__()
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
-        self.nextfuture: asyncio.Future[Tuple[contextvars.Context, T]] = (
-            asyncio.Future()
-        )
+        self.queue: "asyncio.Queue[Tuple[str, Any]]" = asyncio.Queue()
         self.iscancelled = False
 
     def set_cancelled(self):
         """WIll be called by the asyncio loop"""
         self.iscancelled = True
 
-    def next(self, args: T):
-        """Will be called by the asyncio loop"""
-        context = contextvars.copy_context()
+    def _push(self, item: Tuple[str, Any]):
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, item)
 
-        self.loop.call_soon_threadsafe(self.nextfuture.set_result, (context, args))
+    def next(self, args: T):
+        """Push the next value to the consumer (callable from any thread)."""
+        context = contextvars.copy_context()
+        self._push(("value", (context, args)))
 
     def throw(self, exception: BaseException):
-        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, exception)
+        """Raise *exception* in the consumer (callable from any thread)."""
+        self._push(("throw", exception))
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, QtStopIteration())
+        """End the stream: the consuming ``async for`` completes normally."""
+        self._push(("stop", None))
 
 
 class qt_to_async(QtCore.QObject, Generic[T, P]):
@@ -251,9 +262,11 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
 
 class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
     cancelled: SignalProtocol[Any] = signal_builder(QtFuture)
+    # A single object argument (the packed tuple below) — declaring the four
+    # element types instead makes the emit fail with a signature mismatch.
     _called: SignalProtocol[
         Tuple[QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
-    ] = signal_builder(QtFuture, tuple, dict, object)
+    ] = signal_builder(object)
 
     def __init__(
         self,
@@ -298,14 +311,20 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         try:
             while True:
                 if self.timeout:
-                    context, result = await asyncio.wait_for(
-                        qtgenerator.nextfuture, timeout=self.timeout
+                    kind, payload = await asyncio.wait_for(
+                        qtgenerator.queue.get(), timeout=self.timeout
                     )
                 else:
-                    context, result = await qtgenerator.nextfuture
+                    kind, payload = await qtgenerator.queue.get()
 
-                for ctx, value in context.items():
-                    ctx.set(value)
+                if kind == "stop":
+                    return
+                if kind == "throw":
+                    raise payload
+
+                context, result = payload
+                for var, value in context.items():
+                    var.set(value)
 
                 yield result
 
@@ -483,15 +502,21 @@ class QtKoil(Koil):
         self._qobject = None
 
     def __enter__(self):
-        super().__enter__()
+        # Validate BEFORE starting the loop thread: a failed precondition must
+        # not leak a running loop that no __exit__ will ever stop.
         assert self.parent, "Parent must be set before entering the loop"
-        self._qobject = WrappedObject(parent=self.parent, koil=self)
-        assert self._qobject.parent() is not None, (
-            "No parent found. Please provide a parent"
-        )
-        ap_instance = QtWidgets.QApplication.instance()
-        if ap_instance is None:
+        if QtWidgets.QApplication.instance() is None:
             raise NotImplementedError("Qt Application not found")
+
+        super().__enter__()
+        try:
+            self._qobject = WrappedObject(parent=self.parent, koil=self)
+            assert self._qobject.parent() is not None, (
+                "No parent found. Please provide a parent"
+            )
+        except BaseException:
+            super().__exit__(None, None, None)
+            raise
         return self
 
 

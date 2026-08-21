@@ -93,3 +93,55 @@ def test_unkoil_gen_single_value():
         assert next(gen) == 99
         with pytest.raises(StopIteration):
             next(gen)
+
+
+# ---------------------------------------------------------------------------
+# unkoil_gen: sending values into the async generator
+# ---------------------------------------------------------------------------
+
+
+async def _echo_gen():
+    got = yield "first"
+    while True:
+        if got is None:
+            got = yield "was-none"
+        else:
+            got = yield got * 2
+
+
+def test_unkoil_gen_forwards_sent_values():
+    """Non-None values sent into the sync generator reach the async generator
+    via asend() (previously crashed with __anext__() taking no arguments)."""
+    with Koil():
+        gen = unkoil_gen(_echo_gen)
+        assert next(gen) == "first"
+        assert gen.send(21) == 42
+        assert gen.send(5) == 10
+        assert next(gen) == "was-none"
+        gen.close()
+
+
+def test_unkoil_gen_with_timeout_forwards_sent_values():
+    from koil.bridge import unkoil_gen_with_timeout
+
+    with Koil():
+        gen = unkoil_gen_with_timeout(_echo_gen, 2.0)
+        assert next(gen) == "first"
+        assert gen.send(3) == 6
+        gen.close()
+
+
+def test_thread_safe_event_set_visible_even_when_loop_is_blocked():
+    """set() must be visible to worker-side is_set() polls immediately, even
+    while the loop cannot run callbacks (that is exactly when cooperative
+    cancellation matters most)."""
+    loop = asyncio.new_event_loop()  # never run: simulates a wedged loop
+    try:
+        event = KoilThreadSafeEvent(loop)
+        assert not event.is_set()
+        event.set()
+        assert event.is_set()  # no loop iteration happened, still visible
+        event.clear()
+        assert not event.is_set()
+    finally:
+        loop.close()
