@@ -338,3 +338,65 @@ def test_async_to_qt_timeout_emits_errored(qtbot: QtBot):
 
     assert isinstance(blocker.args[0], KoilTimeoutError)  # type: ignore
     assert not cancelled_calls
+
+
+# --------------------------------------------------------------------------- #
+# The Qt main thread outlives every call made on it
+# --------------------------------------------------------------------------- #
+
+#: Set by the caller, read by the Qt slot. Never set on the Qt thread itself.
+task: contextvars.ContextVar["str | None"] = contextvars.ContextVar(
+    "task", default=None
+)
+
+
+class ContextLeakWidget(QtWidgets.QWidget):
+    """Calls a Qt slot from the loop and records what the slot could see.
+
+    The two calls are separate ``run()`` invocations, so each gets its own asyncio
+    Task and therefore its own context: the second never sets ``task`` at all.
+    That is what exposes a leak -- if the first call's value is still on the Qt
+    main thread, the second slot reads it.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.koil = create_qt_koil(self)
+        self.do_me = qt_to_async(self.in_qt_slot)
+        self.seen: list[str | None] = []
+
+        self.with_task = async_to_qt(self.call_with_task)
+        self.without_task = async_to_qt(self.call_without_task)
+
+    def in_qt_slot(self, future: QtFuture[str]):
+        self.seen.append(task.get())
+        future.resolve("ok")
+
+    async def call_with_task(self) -> str:
+        task.set("t1")
+        return await self.do_me.acall()
+
+    async def call_without_task(self) -> str:
+        # Never touches `task`: whatever it sees was left behind by someone else.
+        return await self.do_me.acall()
+
+
+@pytest.mark.qt
+def test_qt_slot_sees_its_callers_task_and_leaves_nothing_behind(qtbot: QtBot):
+    """A contextvar reaches the Qt slot, and does not outlive the call.
+
+    The Qt main thread is shared by every widget and lives as long as the app, so
+    a value left on it is read by the *next* slot -- one belonging to a different
+    caller, or to none. Before ``ctx.run``, the second call here saw ``"t1"``.
+    """
+    widget = ContextLeakWidget()
+    qtbot.addWidget(widget)  # type: ignore
+
+    with qtbot.waitSignal(widget.with_task.returned, timeout=1000):  # type: ignore
+        widget.with_task.run()
+    with qtbot.waitSignal(widget.without_task.returned, timeout=1000):  # type: ignore
+        widget.without_task.run()
+
+    assert widget.seen[0] == "t1", "the slot must see its own caller's task"
+    assert widget.seen[1] is None, "the first call's task leaked to the second"
+    assert task.get() is None, "the caller's task was left on the Qt main thread"

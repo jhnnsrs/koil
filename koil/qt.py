@@ -214,10 +214,12 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
         qtfuture, args, kwargs, ctx = typed_tuple
 
         try:
-            for ctx, value in ctx.items():
-                ctx.set(value)
-
-            self.coro(qtfuture, *args, **kwargs)  # type: ignore
+            # ``ctx.run`` rather than setting each var: this runs on the Qt main
+            # thread, which outlives every call on it. Bare ``.set()`` left the
+            # caller's values there forever, so the next slot -- belonging to
+            # another caller, or to none -- read whatever the last one happened
+            # to leave behind.
+            ctx.run(self.coro, qtfuture, *args, **kwargs)  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -238,8 +240,8 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
             else:
                 context, x = await qtfuture.aiofuture
 
-            for ctx, value in context.items():
-                ctx.set(value)
+            for var, value in context.items():
+                var.set(value)
 
             return x
 
@@ -278,10 +280,9 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         qtgenerator, args, kwargs, ctx = typed_tuple
 
         try:
-            for ctx, value in ctx.items():
-                ctx.set(value)
-
-            self.coro(qtgenerator, *args, **kwargs)  # type: ignore
+            # Scoped to the call, not left on the Qt main thread -- see
+            # ``qt_to_async.on_called``.
+            ctx.run(self.coro, qtgenerator, *args, **kwargs)  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -304,8 +305,8 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
                 else:
                     context, result = await qtgenerator.nextfuture
 
-                for ctx, value in context.items():
-                    ctx.set(value)
+                for var, value in context.items():
+                    var.set(value)
 
                 yield result
 
@@ -349,9 +350,10 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
     def on_returnedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
         res, ctxs = answer
 
-        for ctx, value in ctxs.items():
-            ctx.set(value)
-        self.returned.emit(res)
+        # The coroutine's context is made visible to whoever handles `returned`,
+        # and then unwound. Setting it on the Qt main thread instead would leave
+        # it there for every later slot -- the thread outlives the call.
+        ctxs.run(self.returned.emit, res)
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[T]:
         koil_loop = get_koiled_loop_or_raise()
@@ -415,10 +417,8 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
     def on_yieldedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
         res, ctxs = answer
 
-        for ctx, value in ctxs.items():
-            ctx.set(value)
-
-        self.yielded.emit(res)
+        # Scoped to the emit -- see `async_to_qt.on_returnedwithoutcontext`.
+        ctxs.run(self.yielded.emit, res)
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> KoilFuture[None]:
         koil_loop = get_koiled_loop_or_raise()
