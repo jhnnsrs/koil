@@ -81,7 +81,25 @@ def _reject_awaitable_object(value: Any, func_name: str) -> None:
         )
 
 
-def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
+def _await_it_instead(fn: Callable[..., Any] | None) -> str:
+    """The fix for calling a sync koil wrapper from async code, spelled out for *fn*."""
+    if fn is None:
+        return (
+            "Use the async variant directly instead, usually the `a`-prefixed "
+            "method, e.g. `await theholder.amethod(...)` rather than `theholder.method(...)`."
+        )
+    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", repr(fn))
+    name = name.rpartition("<locals>.")[
+        2
+    ]  # `Task.aprogress`, not `make.<locals>.Task...`
+    if inspect.isasyncgenfunction(fn):
+        return f"Iterate the async generator directly instead: `async for ... in {name}(...)`."
+    return f"Await the async function directly instead: `await {name}(...)`."
+
+
+def get_koiled_loop_or_raise(
+    *, fn: Callable[..., Any] | None = None
+) -> asyncio.AbstractEventLoop:
     """Return the ambient koil event loop or raise if none is active.
 
     Validates that:
@@ -93,6 +111,11 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
        ``True`` on the active koil instance, which explicitly permits sync-in-
        async usage.
     3. The loop has not been closed.
+
+    Args:
+        fn: The async function the caller wants to run on the loop. Only used to
+            name the fix in the error message when the caller is async code that
+            reached for a sync wrapper.
 
     Raises:
         KoilError: When no koil context is active, when called from within the
@@ -106,28 +129,40 @@ def get_koiled_loop_or_raise() -> asyncio.AbstractEventLoop:
     """
     koil_loop = global_koil_loop.get()
 
-    if not koil_loop:
-        raise KoilError("No koil context found")
-
     try:
-        loop0 = asyncio.get_running_loop()
-        if koil_loop == loop0:
-            raise KoilError(
-                "Calling unkoil() from within a running loop. This is not supported"
-            )
-        else:
-            koil = global_koil.get()
-            if koil:
-                if not koil.sync_in_async:
-                    raise KoilError(
-                        "Calling unkoil() from within a running loop while koil doesn't allow it. This is not supported"
-                    )
-            else:
-                raise KoilError(
-                    "Calling unkoil() from within a running loop while koil doesn't allow it. This is not supported"
-                )
+        running_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
     except RuntimeError:
-        pass
+        running_loop = None
+
+    if not koil_loop:
+        if running_loop is not None:
+            # The common mistake: a sync wrapper (task.progress, x.call, ...) called
+            # from an `async def`. There is a loop -- this one -- but blocking on it
+            # from inside itself would deadlock, and there is no koil loop to hop to.
+            raise KoilError(
+                "No koil context found: a sync koil wrapper (unkoil) was called from "
+                "inside a running event loop, i.e. from async code, where it cannot "
+                "block. " + _await_it_instead(fn)
+            )
+        raise KoilError(
+            "No koil context found: unkoil needs a koil loop to run on. Enter "
+            "`with Koil():` first, or call from a thread koil started "
+            "(e.g. via run_threaded)."
+        )
+
+    if running_loop is not None:
+        koil = global_koil.get()
+        if koil_loop == running_loop:
+            raise KoilError(
+                "Calling unkoil() from within the koil loop itself, which would "
+                "deadlock. " + _await_it_instead(fn)
+            )
+        if not koil or not koil.sync_in_async:
+            raise KoilError(
+                "Calling unkoil() from within a running event loop while koil doesn't "
+                "allow sync-in-async (Koil(sync_in_async=True)). "
+                + _await_it_instead(fn)
+            )
 
     if koil_loop.is_closed():
         raise RuntimeError("Loop is not running")
@@ -198,7 +233,7 @@ def unkoil_gen(
         KoilError: If no koil context is active.
     """
     _reject_awaitable_object(iterator, "unkoil_gen")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=iterator)
 
     ait = iterator(*args, **kwargs).__aiter__()
 
@@ -277,7 +312,7 @@ def unkoil_gen_with_timeout(
         KoilError: If no koil context is active.
     """
     _reject_awaitable_object(iterator, "unkoil_gen_with_timeout")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=iterator)
 
     ait = iterator(*args, **kwargs).__aiter__()
 
@@ -352,7 +387,7 @@ def unkoil(
         Any exception raised by *coro*.
     """
     _reject_awaitable_object(coro, "unkoil")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=coro)
 
     context_aware_future = run_async_sharing_context(
         coro, koil_loop, None, None, *args, **kwargs
@@ -405,7 +440,7 @@ def unkoil_with_timeout(
         Any exception raised by *coro*.
     """
     _reject_awaitable_object(coro, "unkoil_with_timeout")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=coro)
 
     context_aware_future = run_async_sharing_context(
         coro, koil_loop, None, timeout, *args, **kwargs
@@ -451,7 +486,7 @@ def unkoil_task(
         KoilError: If no koil context is active.
     """
     _reject_awaitable_object(coro, "unkoil_task")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=coro)
 
     return run_async_sharing_context(
         coro,
@@ -500,7 +535,7 @@ def unkoil_task_with_timeout(
         KoilError: If no koil context is active.
     """
     _reject_awaitable_object(coro, "unkoil_task_with_timeout")
-    koil_loop = get_koiled_loop_or_raise()
+    koil_loop = get_koiled_loop_or_raise(fn=coro)
 
     return run_async_sharing_context(
         coro,

@@ -27,6 +27,38 @@ def test_unkoil_gen_without_koil_context():
         next(gen)
 
 
+async def test_unkoil_from_async_code_says_await_it():
+    # The sync wrapper reached for from an `async def`: there is a loop, but no
+    # koil one, and the error has to name the fix rather than just "no context".
+    with pytest.raises(KoilError, match="No koil context found") as info:
+        unkoil(_noop)
+    assert "running event loop" in str(info.value)
+    assert "await _noop(...)" in str(info.value)
+
+
+async def test_unkoil_gen_from_async_code_says_async_for_it():
+    with pytest.raises(KoilError, match="No koil context found") as info:
+        next(unkoil_gen(_noop_gen))
+    assert "running event loop" in str(info.value)
+    assert "async for ... in _noop_gen(...)" in str(info.value)
+
+
+async def test_bound_method_from_async_code_names_the_async_method():
+    class Task:
+        async def aprogress(self) -> None: ...
+
+        def progress(self) -> None:
+            unkoil(self.aprogress)
+
+    with pytest.raises(KoilError, match=r"await Task\.aprogress\(\.\.\.\)"):
+        Task().progress()
+
+
+def test_unkoil_without_any_loop_says_enter_koil():
+    with pytest.raises(KoilError, match="with Koil\\(\\)"):
+        unkoil(_noop)
+
+
 async def test_koil_sync_in_async_false_raises():
     # Inside an async test there is a running event loop, so Koil(sync_in_async=False)
     # should reject __enter__ with ContextError.
