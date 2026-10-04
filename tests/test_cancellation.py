@@ -139,3 +139,34 @@ async def test_cancel_timeout_constructor_kwarg():
         global_koil.reset(token)
         blocker.set()
         await asyncio.sleep(0)
+
+
+class IdleLoopSleeper(KoiledModel):
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def nap(self) -> float:
+        return await run_threaded(self._nap)
+
+    def _nap(self) -> float:
+        started = time.monotonic()
+        for _ in range(5):
+            sleep(0.02)
+        return time.monotonic() - started
+
+
+@pytest.mark.timeout(10)
+async def test_sleep_returns_on_time_while_the_loop_is_idle():
+    """A worker's sleep is timed by the loop, and the loop has to be woken for it.
+
+    Nothing else happens on the loop here: it only awaits the worker. A timer added
+    from the worker's thread without waking the loop was not noticed until something
+    else did, so each sleep lasted until the next unrelated event -- or for ever.
+    """
+    async with IdleLoopSleeper() as sleeper:
+        took = await asyncio.wait_for(sleeper.nap(), timeout=5)
+
+    assert 0.1 <= took < 1.0, f"five sleeps of 20 ms took {took:.2f} s"

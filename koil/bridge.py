@@ -197,7 +197,11 @@ def sleep(seconds: float, event_wait_time: float = 0.1) -> None:
     def timer_callback() -> None:
         event.set()
 
-    koil_loop.call_later(seconds, timer_callback)
+    # Through `call_soon_threadsafe`: this runs in a worker thread, and a timer
+    # added to the loop from outside it does not wake the loop. An idle loop
+    # would only notice the timer when something else woke it, so the sleep
+    # lasted until the next unrelated message.
+    koil_loop.call_soon_threadsafe(koil_loop.call_later, seconds, timer_callback)
 
     while not event.is_set():
         event.wait(timeout=event_wait_time)
