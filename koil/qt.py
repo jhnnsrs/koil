@@ -14,6 +14,8 @@ from typing import (
     TypeVar,
     Awaitable,
     Concatenate,
+    Optional,
+    cast,
 )
 from koil.bridge import get_koiled_loop_or_raise
 from koil.protocols import SignalProtocol
@@ -163,9 +165,11 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         super().__init__()
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
-        self.nextfuture: asyncio.Future[Tuple[contextvars.Context, T]] = (
-            asyncio.Future()
-        )
+        # A queue, not one future: Qt may hand over several values before the
+        # loop takes the first, and each of them is to be yielded once.
+        self.queue: asyncio.Queue[
+            Tuple[Optional[contextvars.Context], Optional[T], Optional[BaseException]]
+        ] = asyncio.Queue()
         self.iscancelled = False
 
     def set_cancelled(self):
@@ -173,16 +177,29 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         self.iscancelled = True
 
     def next(self, args: T):
-        """Will be called by the asyncio loop"""
+        """Yield a value. Called from the Qt loop."""
         context = contextvars.copy_context()
 
-        self.loop.call_soon_threadsafe(self.nextfuture.set_result, (context, args))
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, (context, args, None))
 
     def throw(self, exception: BaseException):
-        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, exception)
+        """End the generator with an exception. Called from the Qt loop."""
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, (None, None, exception))
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.nextfuture.set_exception, QtStopIteration())
+        """End the generator: what was yielded before is still delivered."""
+        self.throw(QtStopIteration())
+
+    async def anext(self) -> Tuple[contextvars.Context, T]:
+        """The next value and the context it was yielded in. Called in the asyncio loop.
+
+        Raises:
+            QtStopIteration: When the generator was stopped.
+        """
+        context, value, exception = await self.queue.get()
+        if exception is not None:
+            raise exception
+        return cast(contextvars.Context, context), cast(T, value)
 
 
 class qt_to_async(QtCore.QObject, Generic[T, P]):
@@ -252,10 +269,10 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
 
 
 class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
-    cancelled: SignalProtocol[Any] = signal_builder(QtFuture)
+    cancelled: SignalProtocol[Any] = signal_builder(QtGenerator)
     _called: SignalProtocol[
         Tuple[QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
-    ] = signal_builder(QtFuture, tuple, dict, object)
+    ] = signal_builder(object)
 
     def __init__(
         self,
@@ -298,12 +315,15 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
 
         try:
             while True:
-                if self.timeout:
-                    context, result = await asyncio.wait_for(
-                        qtgenerator.nextfuture, timeout=self.timeout
-                    )
-                else:
-                    context, result = await qtgenerator.nextfuture
+                try:
+                    if self.timeout:
+                        context, result = await asyncio.wait_for(
+                            qtgenerator.anext(), timeout=self.timeout
+                        )
+                    else:
+                        context, result = await qtgenerator.anext()
+                except QtStopIteration:
+                    return
 
                 for var, value in context.items():
                     var.set(value)
