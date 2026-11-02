@@ -1,7 +1,7 @@
 from types import TracebackType
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 from koil.decorators import koilable
-from typing import Optional, Self, TypeVar
+from typing import Self, TypeVar
 from koil.loop import Koil
 
 T = TypeVar("T")
@@ -9,7 +9,7 @@ T = TypeVar("T")
 
 @koilable(fieldname="__koil", add_connectors=True)
 class KoiledModel(BaseModel):
-    __koil: Optional[Koil] = PrivateAttr(None)
+    __koil: Koil | None = PrivateAttr(None)
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     def __enter__(self: Self) -> Self: ...

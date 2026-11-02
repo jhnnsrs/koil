@@ -5,21 +5,15 @@ import logging
 from types import TracebackType
 from typing import (
     Any,
-    AsyncContextManager,
-    AsyncGenerator,
-    Callable,
-    ContextManager,
-    Coroutine,
-    Generator,
     Generic,
     ParamSpec,
     Protocol,
     Self,
-    Type,
     TypeVar,
-    Union,
     overload,
 )
+from collections.abc import AsyncGenerator, Callable, Coroutine, Generator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
 from koil.bridge import (
     unkoil,
@@ -61,22 +55,22 @@ logger = logging.getLogger(__name__)
 
 
 @overload
-def koilable(maybe_cls: Type[T]) -> Type[T]: ...
+def koilable(maybe_cls: type[T]) -> type[T]: ...
 
 
 @overload
 def koilable(
-    maybe_cls: Union[str, None] = None,
+    maybe_cls: str | None = None,
     add_connectors: bool = False,
     fieldname: str = "__koil",
-) -> Callable[[Type[T]], Type[T]]: ...
+) -> Callable[[type[T]], type[T]]: ...
 
 
 def koilable(
-    maybe_cls: Union[Type[T], str, None] = None,
+    maybe_cls: type[T] | str | None = None,
     add_connectors: bool = False,
     fieldname: str = "__koil",
-) -> Union[Type[T], Callable[[Type[T]], Type[T]]]:
+) -> type[T] | Callable[[type[T]], type[T]]:
     """
     Decorator to make an async context manager class usable from sync code.
 
@@ -101,7 +95,7 @@ def koilable(
         fieldname = maybe_cls
         maybe_cls = None
 
-    def real_cls_decorator(cls: Type[T]) -> Type[T]:
+    def real_cls_decorator(cls: type[T]) -> type[T]:
         if not hasattr(cls, "__aenter__"):
             raise TypeError(f"@koilable class {cls.__name__} must implement __aenter__")
         if not hasattr(cls, "__aexit__"):
@@ -298,7 +292,7 @@ class _KoiledContextManager(Generic[TCM]):
     """Sync context manager driving an async context manager over the koil loop."""
 
     def __init__(
-        self, acm: AsyncContextManager[TCM], koil: Koil | None = None
+        self, acm: AbstractAsyncContextManager[TCM], koil: Koil | None = None
     ) -> None:
         self._acm = acm
         self._koil = koil
@@ -336,8 +330,8 @@ class _KoiledContextManager(Generic[TCM]):
 
 
 def koiled_cm(
-    acm: AsyncContextManager[TCM], koil: Koil | None = None
-) -> ContextManager[TCM]:
+    acm: AbstractAsyncContextManager[TCM], koil: Koil | None = None
+) -> AbstractContextManager[TCM]:
     """Wrap an async context manager *instance* into a sync context manager.
 
     The contextlib-style counterpart to the :func:`koilable` class decorator:

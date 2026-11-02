@@ -5,22 +5,16 @@ import logging
 from dataclasses import dataclass
 from typing import (
     Any,
-    AsyncGenerator,
-    AsyncIterator,
-    Callable,
-    Dict,
     Generic,
-    Tuple,
     TypeVar,
-    Awaitable,
     Concatenate,
-    Optional,
+    ParamSpec,
     cast,
 )
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Awaitable
 from koil.bridge import get_koiled_loop_or_raise
 from koil.protocols import SignalProtocol
 from qtpy import QtCore, QtWidgets
-from typing_extensions import ParamSpec
 from koil.loop import Koil
 from koil.utils import (
     run_async_sharing_context,
@@ -65,7 +59,7 @@ def _set_future_exception(fut: "asyncio.Future[Any]", exc: BaseException) -> Non
 # Your dynamic signal bundle
 @dataclass
 class QtSignalHolder(Generic[T]):
-    returned: SignalProtocol[Tuple[T, contextvars.Context]]
+    returned: SignalProtocol[tuple[T, contextvars.Context]]
     cancelled: SignalProtocol[CancelledError]
     errored: SignalProtocol[BaseException]
     called: SignalProtocol[None]
@@ -76,7 +70,7 @@ class QtIteratorSignalHolder(Generic[T]):
     done: SignalProtocol[None]
     cancelled: SignalProtocol[CancelledError]
     errored: SignalProtocol[BaseException]
-    next: SignalProtocol[Tuple[T, contextvars.Context]]
+    next: SignalProtocol[tuple[T, contextvars.Context]]
 
 
 def signal_builder(*args: Any) -> SignalProtocol[Any]:
@@ -108,7 +102,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
         super().__init__(parent=parent)
         self.id = uuid.uuid4().hex
         self.loop = asyncio.get_event_loop()
-        self.aiofuture: asyncio.Future[Tuple[contextvars.Context, T]] = asyncio.Future()
+        self.aiofuture: asyncio.Future[tuple[contextvars.Context, T]] = asyncio.Future()
         self.iscancelled = False
         self.resolved = False
         self.rejected = False
@@ -168,7 +162,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         # A queue, not one future: Qt may hand over several values before the
         # loop takes the first, and each of them is to be yielded once.
         self.queue: asyncio.Queue[
-            Tuple[Optional[contextvars.Context], Optional[T], Optional[BaseException]]
+            tuple[contextvars.Context | None, T | None, BaseException | None]
         ] = asyncio.Queue()
         self.iscancelled = False
 
@@ -190,7 +184,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         """End the generator: what was yielded before is still delivered."""
         self.throw(QtStopIteration())
 
-    async def anext(self) -> Tuple[contextvars.Context, T]:
+    async def anext(self) -> tuple[contextvars.Context, T]:
         """The next value and the context it was yielded in. Called in the asyncio loop.
 
         Raises:
@@ -205,7 +199,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
 class qt_to_async(QtCore.QObject, Generic[T, P]):
     cancelled: SignalProtocol[Any] = signal_builder(QtFuture)  # type: ignore
     _called: SignalProtocol[
-        Tuple[QtFuture[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
+        tuple[QtFuture[T], tuple[object, ...], dict[str, Any], contextvars.Context]
     ] = signal_builder(object)
 
     def __init__(
@@ -224,8 +218,8 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
 
     def on_called(
         self,
-        typed_tuple: Tuple[
-            QtFuture[T], Tuple[object, ...], Dict[str, Any], contextvars.Context
+        typed_tuple: tuple[
+            QtFuture[T], tuple[object, ...], dict[str, Any], contextvars.Context
         ],
     ):
         qtfuture, args, kwargs, ctx = typed_tuple
@@ -271,7 +265,7 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
 class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
     cancelled: SignalProtocol[Any] = signal_builder(QtGenerator)
     _called: SignalProtocol[
-        Tuple[QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context]
+        tuple[QtGenerator[T], tuple[object, ...], dict[str, Any], contextvars.Context]
     ] = signal_builder(object)
 
     def __init__(
@@ -290,8 +284,8 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
 
     def on_called(
         self,
-        typed_tuple: Tuple[
-            QtGenerator[T], Tuple[object, ...], Dict[str, Any], contextvars.Context
+        typed_tuple: tuple[
+            QtGenerator[T], tuple[object, ...], dict[str, Any], contextvars.Context
         ],
     ):
         qtgenerator, args, kwargs, ctx = typed_tuple
@@ -342,7 +336,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
     cancelled: "SignalProtocol[CancelledError]" = signal_builder(CancelledError)  # type: ignore
     returned: SignalProtocol[T] = signal_builder(object)  # type: ignore
 
-    _returnedwithoutcontext: "SignalProtocol[Tuple[T, contextvars.Context]]" = (
+    _returnedwithoutcontext: "SignalProtocol[tuple[T, contextvars.Context]]" = (
         signal_builder(object)
     )  # type: ignore
 
@@ -367,7 +361,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
         self.timeout = timeout
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
 
-    def on_returnedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
+    def on_returnedwithoutcontext(self, answer: tuple[T, contextvars.Context]):
         res, ctxs = answer
 
         # The coroutine's context is made visible to whoever handles `returned`,
@@ -406,7 +400,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
     cancelled: SignalProtocol[CancelledError] = signal_builder(Exception)
     yielded: SignalProtocol[T] = signal_builder(object)
     done: SignalProtocol[None] = signal_builder(object)
-    _yieldedwithoutcontext: SignalProtocol[Tuple[T, contextvars.Context]] = (
+    _yieldedwithoutcontext: SignalProtocol[tuple[T, contextvars.Context]] = (
         signal_builder(object)
     )
 
@@ -434,7 +428,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
         self.timeout = timeout
         self._yieldedwithoutcontext.connect(self.on_yieldedwithoutcontext)
 
-    def on_yieldedwithoutcontext(self, answer: Tuple[T, contextvars.Context]):
+    def on_yieldedwithoutcontext(self, answer: tuple[T, contextvars.Context]):
         res, ctxs = answer
 
         # Scoped to the emit -- see `async_to_qt.on_returnedwithoutcontext`.

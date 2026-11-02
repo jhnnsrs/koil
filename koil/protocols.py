@@ -1,11 +1,10 @@
 
 from typing import (
-    Callable,
     Generic,
-    Tuple,
     TypeVar,
     Protocol,
 )
+from collections.abc import Callable
 import contextvars
 from .errors import CancelledError
 
@@ -39,7 +38,7 @@ class TaskSignalProtocol(Protocol, Generic[T]):
         ...
     
     @property  
-    def returned(self) -> SignalProtocol[Tuple[T, contextvars.Context]]:
+    def returned(self) -> SignalProtocol[tuple[T, contextvars.Context]]:
         """Signal that the task was finished with a result."""
         ...
     
@@ -58,7 +57,7 @@ class IteratorSignalProtocol(Protocol, Generic[T]):
         ...
     
     @property  
-    def next(self) -> SignalProtocol[Tuple[T, contextvars.Context]]:
+    def next(self) -> SignalProtocol[tuple[T, contextvars.Context]]:
         """Signal that the iterator was finished with a result."""
         ...
         

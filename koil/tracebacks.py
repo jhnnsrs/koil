@@ -35,7 +35,6 @@ Rewriting is on by default and controlled by:
 
 import os
 import types
-from typing import List, Optional, Set, Tuple
 
 from koil.context import global_koil
 
@@ -102,8 +101,8 @@ def prune_traceback(exc: BaseException, *, keep_boundary: bool = False) -> None:
 
     Never raises: traceback cosmetics must not mask the real error.
     """
-    seen: Set[int] = set()
-    stack: List[Tuple[Optional[BaseException], bool]] = [(exc, keep_boundary)]
+    seen: set[int] = set()
+    stack: list[tuple[BaseException | None, bool]] = [(exc, keep_boundary)]
     while stack:
         current, keep = stack.pop()
         if current is None or id(current) in seen:
@@ -122,7 +121,7 @@ def _prune_one(exc: BaseException, keep_boundary: bool) -> None:
     if tb is None:
         return
 
-    kept: List[types.TracebackType] = []
+    kept: list[types.TracebackType] = []
     index = 0
     while tb is not None:
         if (index == 0 and keep_boundary) or not _is_hidden(tb):
@@ -135,7 +134,7 @@ def _prune_one(exc: BaseException, keep_boundary: bool) -> None:
         # inside koil's own machinery, so its frames are the informative part.
         return
 
-    new_tb: Optional[types.TracebackType] = None
+    new_tb: types.TracebackType | None = None
     for entry in reversed(kept):
         new_tb = types.TracebackType(
             new_tb, entry.tb_frame, entry.tb_lasti, entry.tb_lineno

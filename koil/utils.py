@@ -12,15 +12,12 @@ import contextvars
 import concurrent.futures
 import time
 from typing import (
-    AsyncIterator,
-    Awaitable,
-    Callable,
     Generic,
     ParamSpec,
-    Tuple,
     TypeVar,
     cast,
 )
+from collections.abc import AsyncIterator, Awaitable, Callable
 from koil.errors import CancelledError, KoilTimeoutError, ThreadCancelledError
 from koil.types import AnyCallable
 from koil.context import current_cancel_event, global_koil, KoilThreadSafeEvent
@@ -207,7 +204,7 @@ class _KoilFutureBase(Generic[T]):
 
     def __init__(
         self,
-        future: concurrent.futures.Future[Tuple[T, contextvars.Context]],
+        future: concurrent.futures.Future[tuple[T, contextvars.Context]],
         cancel_event: asyncio.Event,
     ) -> None:
         super().__init__()
@@ -506,7 +503,7 @@ def run_async_sharing_context(
                     await asyncio.wait_for(asyncio.shield(untask), timeout=grace)
                 else:
                     await untask
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 acknowledged = False
             except asyncio.CancelledError:
                 pass
@@ -527,7 +524,7 @@ def run_async_sharing_context(
 
                 raise exception
 
-            typed_task = cast(asyncio.Task[Tuple[T, contextvars.Context]], future_t)
+            typed_task = cast(asyncio.Task[tuple[T, contextvars.Context]], future_t)
             result = typed_task.result()
 
             if signals:
@@ -665,7 +662,7 @@ def iterate_async_sharing_context(
                     await asyncio.wait_for(asyncio.shield(untask), timeout=grace)
                 else:
                     await untask
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 acknowledged = False
             except asyncio.CancelledError:
                 pass
@@ -683,7 +680,7 @@ def iterate_async_sharing_context(
 
                 raise exception
 
-            typed_task = cast(asyncio.Task[Tuple[None, contextvars.Context]], future_t)
+            typed_task = cast(asyncio.Task[tuple[None, contextvars.Context]], future_t)
             result = typed_task.result()
 
             if signals:

@@ -1,4 +1,5 @@
-from typing import Callable, Literal, ParamSpec, TypeVar
+from typing import Literal, ParamSpec, TypeVar
+from collections.abc import Callable
 from koil.qt import async_to_qt, async_gen_to_qt
 from pytestqt.qtbot import QtBot # type: ignore
 

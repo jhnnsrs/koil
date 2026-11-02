@@ -1,5 +1,4 @@
 import asyncio
-from typing import Tuple
 import contextvars
 import pytest
 
@@ -149,11 +148,11 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
     def call_task(self):
         self.my_coro_task.run()
 
-    def task_finished(self, both: Tuple[str, str]):
+    def task_finished(self, both: tuple[str, str]):
         str = both[0] + " " + both[1]
         self.greet_label.setText(str)
 
-    async def call_coro(self) -> Tuple[str, str]:
+    async def call_coro(self) -> tuple[str, str]:
         self.coroutine_was_run = True
         return await self.do_me.acall(), "called"
 

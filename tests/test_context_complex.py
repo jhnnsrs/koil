@@ -1,5 +1,5 @@
 import asyncio
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 
 from koil import unkoil, koilable
@@ -11,7 +11,7 @@ import time
 
 
 @koilable()
-class T(object):
+class T:
     def __init__(self) -> None:
         pass
 

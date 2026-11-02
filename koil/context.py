@@ -7,7 +7,7 @@ it runs on, and the per-task cancellation event injected by
 """
 import contextvars
 from koil.errors import ThreadCancelledError
-from typing import Optional, Protocol
+from typing import Protocol
 import asyncio
 
 
@@ -59,7 +59,7 @@ class KoilThreadSafeEvent(asyncio.Event):
         self._loop.call_soon_threadsafe(super().clear)
 
 
-global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextVar(
+global_koil: contextvars.ContextVar[KoiledLoop | None] = contextvars.ContextVar(
     "GLOBAL_KOIL", default=None
 )
 """The :class:`~koil.loop.Koil` (or compatible) instance active in the current context.
@@ -67,7 +67,7 @@ global_koil: contextvars.ContextVar[Optional[KoiledLoop]] = contextvars.ContextV
 Set on ``__enter__`` / ``__aenter__`` and cleared on ``__exit__`` / ``__aexit__``.
 """
 
-global_koil_loop: contextvars.ContextVar[Optional[asyncio.AbstractEventLoop]] = (
+global_koil_loop: contextvars.ContextVar[asyncio.AbstractEventLoop | None] = (
     contextvars.ContextVar("GLOBAL_KOIL_LOOP", default=None)
 )
 """The event loop managed by the active koil instance.
@@ -78,7 +78,7 @@ without importing the concrete ``Koil`` class.
 
 current_koil = contextvars.ContextVar("current_koil", default=None)
 
-current_cancel_event: contextvars.ContextVar[Optional[asyncio.Event]] = (
+current_cancel_event: contextvars.ContextVar[asyncio.Event | None] = (
     contextvars.ContextVar("current_cancel_event", default=None)
 )
 """Per-task cancellation event injected by :func:`~koil.bridge.run_threaded`.

@@ -8,10 +8,10 @@ aliases point at their renamed counterparts ``run_threaded`` /
 
 import importlib
 import warnings
-from typing import Any, Dict, Tuple
+from typing import Any
 
 # name -> (target module, target name)
-_DEPRECATED: Dict[str, Tuple[str, str]] = {
+_DEPRECATED: dict[str, tuple[str, str]] = {
     "get_koiled_loop_or_raise": ("koil.bridge", "get_koiled_loop_or_raise"),
     "sleep": ("koil.bridge", "sleep"),
     "unkoil": ("koil.bridge", "unkoil"),

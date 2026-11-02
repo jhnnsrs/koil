@@ -6,10 +6,10 @@ returns the object from its new home.
 
 import importlib
 import warnings
-from typing import Any, Dict, Tuple
+from typing import Any
 
 # name -> (target module, target name)
-_DEPRECATED: Dict[str, Tuple[str, str]] = {
+_DEPRECATED: dict[str, tuple[str, str]] = {
     "KoiledLoop": ("koil.context", "KoiledLoop"),
     "KoilThreadSafeEvent": ("koil.context", "KoilThreadSafeEvent"),
     "global_koil": ("koil.context", "global_koil"),

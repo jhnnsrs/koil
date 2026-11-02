@@ -28,7 +28,7 @@ from koil.errors import (
     KoilStopIteration,
     ThreadCancelledError,
 )
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 from koil.context import (
     current_cancel_event,
     global_koil,
@@ -37,7 +37,8 @@ from koil.context import (
 )
 import contextvars
 import logging
-from typing import Callable, Dict, Tuple, TypeVar
+from typing import TypeVar
+from collections.abc import Callable
 from koil.utils import (
     run_async_sharing_context,
     aclose_async_gen_threadsafe,
@@ -47,7 +48,8 @@ from koil.tracebacks import prune_traceback, should_rewrite
 from typing import ParamSpec
 
 
-from typing import Coroutine, Any, Union, Awaitable, Generator
+from typing import Any
+from collections.abc import Coroutine, Awaitable, Generator
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -360,10 +362,7 @@ def unkoil_gen_with_timeout(
 
 
 def unkoil(
-    coro: Union[
-        Callable[P, Coroutine[Any, Any, R]],
-        Callable[P, Awaitable[R]],
-    ],
+    coro: Callable[P, Coroutine[Any, Any, R]] | Callable[P, Awaitable[R]],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
@@ -406,10 +405,7 @@ def unkoil(
 
 
 def unkoil_with_timeout(
-    coro: Union[
-        Callable[P, Coroutine[Any, Any, R]],
-        Callable[P, Awaitable[R]],
-    ],
+    coro: Callable[P, Coroutine[Any, Any, R]] | Callable[P, Awaitable[R]],
     timeout: float,
     /,
     *args: P.args,
@@ -464,10 +460,7 @@ TaskNext = TypeVar("TaskNext")
 
 
 def unkoil_task(
-    coro: Union[
-        Callable[P, Coroutine[Any, Any, R]],
-        Callable[P, Awaitable[R]],
-    ],
+    coro: Callable[P, Coroutine[Any, Any, R]] | Callable[P, Awaitable[R]],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> KoilFuture[R]:
@@ -503,10 +496,7 @@ def unkoil_task(
 
 
 def unkoil_task_with_timeout(
-    coro: Union[
-        Callable[P, Coroutine[Any, Any, R]],
-        Callable[P, Awaitable[R]],
-    ],
+    coro: Callable[P, Coroutine[Any, Any, R]] | Callable[P, Awaitable[R]],
     timeout: float,
     /,
     *args: P.args,
@@ -557,7 +547,7 @@ S = TypeVar("S")
 # bookkeeping. They must never be bridged back into the caller's context: the
 # loop/koil references are already correct there, and the cancel event is
 # per-call worker state that is meaningless (and would leak) outside the thread.
-_BRIDGE_INTERNAL_VARS: Tuple[contextvars.ContextVar[Any], ...] = (
+_BRIDGE_INTERNAL_VARS: tuple[contextvars.ContextVar[Any], ...] = (
     global_koil,
     global_koil_loop,
     current_cancel_event,
@@ -585,8 +575,8 @@ def _propagate_context_out(worker_context: contextvars.Context) -> None:
 
 async def _run_threaded(
     sync_func: Callable[P, R],
-    sync_args: Tuple[Any, ...],
-    sync_kwargs: Dict[str, Any],
+    sync_args: tuple[Any, ...],
+    sync_kwargs: dict[str, Any],
     *,
     bridge: bool,
 ) -> R:
@@ -649,7 +639,7 @@ async def _run_threaded(
             await asyncio.wait_for(future, timeout=koil.cancel_timeout if koil else 10)
         except ThreadCancelledError:
             logging.info("Future in another thread was successfully cancelled")
-        except asyncio.TimeoutError as te:
+        except TimeoutError as te:
             raise KoilError(
                 f"We could not successfully cancel the future {future} in another thread. Make sure you are not blocking the thread with a long running task and check if you call check_cancelled periodically."
             ) from te
@@ -748,8 +738,8 @@ async def run_threaded_bridged(
 
 async def _iterate_threaded(
     sync_gen: Callable[P, Generator[R, S, None]],
-    sync_args: Tuple[Any, ...],
-    sync_kwargs: Dict[str, Any],
+    sync_args: tuple[Any, ...],
+    sync_kwargs: dict[str, Any],
     *,
     bridge: bool,
 ) -> AsyncGenerator[R, S]:
