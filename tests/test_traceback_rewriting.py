@@ -192,7 +192,7 @@ def test_flag_off_restores_full_frames():
     assert futures_frames(e)
     names = [f.name for f in frames(e)]
     assert "result" in names
-    assert "passed_with_context" in names
+    assert "_run" in names
 
 
 def test_env_var_forces_full(monkeypatch):
@@ -203,7 +203,7 @@ def test_env_var_forces_full(monkeypatch):
 
     e = excinfo.value
     assert futures_frames(e)
-    assert "passed_with_context" in [f.name for f in frames(e)]
+    assert "_run" in [f.name for f in frames(e)]
 
 
 def test_chained_user_exceptions():

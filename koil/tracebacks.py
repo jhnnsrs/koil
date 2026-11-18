@@ -77,7 +77,14 @@ def should_rewrite() -> bool:
 def _is_hidden(tb: types.TracebackType) -> bool:
     """Return ``True`` if this traceback entry is koil-transport noise."""
     frame = tb.tb_frame
-    if frame.f_locals.get("__tracebackhide__"):
+    # Only frames whose code has a ``__tracebackhide__`` local can be hidden,
+    # and that is visible on the code object. Reading ``f_locals`` builds the
+    # frame's whole locals dict (on Python < 3.13), so it is reserved for the
+    # few frames that pass this check instead of every frame of every
+    # traceback crossing the bridge.
+    if "__tracebackhide__" in frame.f_code.co_varnames and frame.f_locals.get(
+        "__tracebackhide__"
+    ):
         return True
     return frame.f_globals.get("__name__") in _HIDDEN_MODULES
 

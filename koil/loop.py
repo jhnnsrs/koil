@@ -6,12 +6,18 @@ called from synchronous call sites via :mod:`koil.bridge`.
 """
 import asyncio
 import os
-import sys
 import threading
 from types import TracebackType
 from typing import Protocol, Self
-from koil.context import global_koil, global_koil_loop
-from koil.errors import ContextError
+from koil.context import (
+    ambient_koil,
+    global_koil,
+    global_koil_loop,
+    register_loop,
+    unregister_loop,
+)
+from koil.errors import CancelledError, ContextError
+from koil.executor import KoilExecutor
 import logging
 
 try:
@@ -36,6 +42,19 @@ logger = logging.getLogger(__name__)
 #: to :class:`Koil`. It is intentionally *separate* from
 #: :attr:`Koil.cancel_timeout`, which bounds the initial graceful wait.
 SHUTDOWN_JOIN_TIMEOUT: float = 5.0
+
+#: Slack, in seconds, added to :attr:`Koil.cancel_timeout` for the graceful
+#: wait in :meth:`Koil.__exit__`. Shutting the loop down cancels its tasks, and
+#: a task waiting on a ``run_threaded`` worker gives that worker exactly
+#: ``cancel_timeout`` to acknowledge. Without the slack the two deadlines
+#: coincide and a single slow worker always looked like a wedged loop.
+SHUTDOWN_MARGIN: float = 0.5
+
+#: Default size of the worker pool a :class:`Koil` runs ``run_threaded`` code
+#: on. Threads are only started when needed, so a generous bound is cheap —
+#: and it is a bound on how many sync functions can *block* at once (sync code
+#: waiting on async code waiting on sync code occupies a thread per level).
+DEFAULT_MAX_WORKERS: int = max(64, (os.cpu_count() or 1) * 4)
 
 
 class KoilProtocol(Protocol):
@@ -63,7 +82,9 @@ def _new_event_loop(uvify: bool = True) -> asyncio.AbstractEventLoop:
 
     Args:
         uvify: Use ``uvloop`` when available for better throughput. Falls back
-            to the stdlib default loop if ``uvloop`` is not installed.
+            to the stdlib default loop if ``uvloop`` is not installed. When
+            ``False``, Windows gets a ``SelectorEventLoop`` rather than its
+            default proactor loop.
 
     Returns:
         A new, not-yet-running event loop.
@@ -73,11 +94,7 @@ def _new_event_loop(uvify: bool = True) -> asyncio.AbstractEventLoop:
             return uvloop.new_event_loop()  # type: ignore[no-any-return]
         logger.info("uvloop not installed, using default policy")
         return asyncio.new_event_loop()
-    elif (
-        sys.version_info >= (3, 8)
-        and os.name == "nt"
-        and hasattr(asyncio, "SelectorEventLoop")
-    ):
+    elif os.name == "nt" and hasattr(asyncio, "SelectorEventLoop"):
         return asyncio.SelectorEventLoop()
     return asyncio.new_event_loop()
 
@@ -175,9 +192,14 @@ class Koil:
     (``unkoil``, ``run_threaded``, etc.) use this loop to execute async code
     without blocking the calling thread.
 
-    Entering a ``Koil`` inside an already-running asyncio loop is allowed when
-    *sync_in_async* is ``True`` (the default); the existing loop is reused and
-    no new thread is spawned.
+    Entering a ``Koil`` with ``with`` inside an already-running asyncio loop is
+    allowed when *sync_in_async* is ``True`` (the default). It still starts its
+    own loop thread: sync code on the running loop's thread can then block on
+    koil's loop, which it could never do on the loop it is running on.
+
+    Sync code handed to :func:`~koil.bridge.run_threaded` runs on a worker pool
+    the ``Koil`` owns (*max_workers* threads at most, started on demand), not
+    on the loop's default executor.
 
     Example::
 
@@ -186,7 +208,11 @@ class Koil:
 
     ``Koil`` also supports the ``async with`` protocol for use inside existing
     async code, where it simply captures the running loop without starting a new
-    thread.
+    thread. Inside an already active koil context that is a no-op.
+
+    A ``Koil`` belongs to the process that entered it: a forked child inherits
+    the object but not the loop thread, and bridge calls there raise instead of
+    waiting forever.
     """
 
     def __init__(
@@ -196,9 +222,16 @@ class Koil:
         shutdown_join_timeout: float | None = None,
         rewrite_tracebacks: bool = True,
         cancel_timeout: float = 2.0,
+        max_workers: int | None = None,
     ) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
+        self._executor: KoilExecutor | None = None
+        self._pid: int | None = None
+        self._async_entered = False
+        #: Upper bound on the worker threads ``run_threaded`` may use at once.
+        #: ``None`` uses :data:`DEFAULT_MAX_WORKERS`.
+        self.max_workers = max_workers
         self.running = False
         self.sync_in_async = sync_in_async
         self.uvify = uvify
@@ -237,13 +270,24 @@ class Koil:
             raise RuntimeError("Loop is not running. This should not happen")
         return self._loop
 
-    async def __aenter__(self) -> "Koil":
-        try:
-            self._loop = asyncio.get_running_loop()
-            global_koil_loop.set(self._loop)
-        except RuntimeError:
-            pass
+    @property
+    def pid(self) -> int | None:
+        """The process this instance was entered in, or ``None`` when not entered."""
+        return self._pid
 
+    async def __aenter__(self) -> "Koil":
+        # Only claim the ambient context when there is none. Inside an active
+        # koil context (e.g. a coroutine reached through unkoil) the ambient
+        # koil stays what it is: this coroutine's context is handed back to the
+        # sync caller, and overwriting it there would cut that caller off from
+        # its own loop.
+        if global_koil.get() is None:
+            self._loop = asyncio.get_running_loop()
+            self._pid = os.getpid()
+            self._async_entered = True
+            global_koil.set(self)
+            global_koil_loop.set(self._loop)
+        self.running = True
         return self
 
     async def __aexit__(
@@ -252,7 +296,15 @@ class Koil:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        global_koil.set(None)  # type: ignore[assignment]
+        # Mirror of __aenter__: undo exactly what it set, and only if it did.
+        if self._async_entered:
+            self._async_entered = False
+            self._loop = None
+            self._pid = None
+            if global_koil.get() is self:
+                global_koil.set(None)
+                global_koil_loop.set(None)
+        self.running = False
         return None
 
     def __enter__(self) -> "Koil":
@@ -268,17 +320,18 @@ class Koil:
         except RuntimeError:
             pass
 
-        koil = global_koil.get()  # type: ignore[assignment]
+        koil = ambient_koil()
 
         if koil is None:
             self._loop, self._loop_thread = get_threaded_loop(
-                getattr(
-                    self,
-                    "name",
-                    f"KoiledLoop {'governed by' + self.__class__.__name__ if getattr(self, 'creating_instance', None) else ''}",
-                ),
+                getattr(self, "name", "KoilLoop"),
                 uvify=getattr(self, "uvify", True),
             )
+            self._executor = KoilExecutor(
+                DEFAULT_MAX_WORKERS if self.max_workers is None else self.max_workers
+            )
+            register_loop(self._loop, self._executor)
+            self._pid = os.getpid()
             global_koil.set(self)
             global_koil_loop.set(self._loop)
         self.running = True
@@ -290,8 +343,30 @@ class Koil:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._async_entered:
+            # Entered with `async with`: there is no thread of ours to stop.
+            self._async_entered = False
+            self._loop = None
+            self._pid = None
+            if global_koil.get() is self:
+                global_koil.set(None)
+                global_koil_loop.set(None)
+        elif self._loop and self._pid != os.getpid():
+            # A forked child: the loop thread only exists in the parent, so
+            # there is nothing to stop here — just let go of the references.
+            self._loop = None
+            self._loop_thread = None
+            self._executor = None
+            self._pid = None
+            if global_koil.get() is self:
+                global_koil.set(None)
+                global_koil_loop.set(None)
+        elif self._loop:
+            loop = self._loop
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # already closed
 
             if self._loop_thread is not None:
                 # Join the loop thread instead of busy-polling `is_running()`.
@@ -299,7 +374,8 @@ class Koil:
                 # shutdown sequence (cancel tasks -> gather -> close), so polling
                 # it can return before the loop is actually closed. Joining the
                 # thread guarantees we only return once `loop.close()` has run.
-                self._loop_thread.join(timeout=self.cancel_timeout)
+                graceful = self.cancel_timeout + SHUTDOWN_MARGIN
+                self._loop_thread.join(timeout=graceful)
                 if self._loop_thread.is_alive():
                     # Graceful stop didn't land within cancel_timeout. Wait a
                     # bounded bit longer, then abandon the thread rather than
@@ -317,7 +393,7 @@ class Koil:
                         "up to %.1fs more before abandoning it. A coroutine is "
                         "likely blocking the event loop. Keyboard interrupt?",
                         self._loop_thread.name,
-                        self.cancel_timeout,
+                        graceful,
                         join_timeout,
                     )
                     self._loop_thread.join(timeout=join_timeout)
@@ -331,14 +407,33 @@ class Koil:
                             "killed on interpreter exit, but resources it holds "
                             "will not be released cleanly.",
                             self._loop_thread.name,
-                            self.cancel_timeout + join_timeout,
+                            graceful + join_timeout,
                         )
                 self._loop_thread = None
+
+            # Workers are daemon threads: one still running after its
+            # cancellation went unanswered is left behind, not waited for.
+            if self._executor is not None:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+                self._executor = None
+
+            # Whatever the loop did not get to resolve (a call submitted while
+            # it was already stopping, or everything on a wedged loop) would
+            # leave its caller blocked forever.
+            state = unregister_loop(loop)
+            if state is not None:
+                state.close(
+                    lambda: CancelledError(
+                        "The koil loop shut down before this call completed."
+                    )
+                )
 
             # Drop the reference so a second __exit__ doesn't call
             # call_soon_threadsafe(stop) on an already-closed loop.
             self._loop = None
-            global_koil.set(None)
-            global_koil_loop.set(None)
+            self._pid = None
+            if global_koil.get() is self:
+                global_koil.set(None)
+                global_koil_loop.set(None)
 
         self.running = False

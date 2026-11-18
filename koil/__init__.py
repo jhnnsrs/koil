@@ -12,10 +12,10 @@ from .bridge import (
     sleep,
 )
 from .decorators import koilable, koiled, koiled_cm
-from .errors import CancelledError, KoilError, KoilTimeoutError
+from .errors import CancelledError, KoilError, KoilTimeoutError, ThreadCancelledError
 from .types import Contextual
 from .loop import Koil
-from .context import check_cancelled
+from .context import check_cancelled, shielded
 from .utils import KoilFuture, KoilIterator
 
 
@@ -32,10 +32,12 @@ __all__ = [
     "CancelledError",
     "KoilError",
     "KoilTimeoutError",
+    "ThreadCancelledError",
     "Contextual",
     "Koil",
     "sleep",
     "check_cancelled",
+    "shielded",
     "iterate_threaded",
     "iterate_threaded_bridged",
     "run_threaded",

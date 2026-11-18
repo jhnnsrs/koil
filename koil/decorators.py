@@ -2,6 +2,8 @@ import asyncio
 import functools
 import inspect
 import logging
+import threading
+import warnings
 from types import TracebackType
 from typing import (
     Any,
@@ -21,7 +23,12 @@ from koil.bridge import (
     unkoil_gen_with_timeout,
     unkoil_with_timeout,
 )
-from koil.context import global_koil
+from koil.context import (
+    THREAD_STYLE_HINT,
+    ambient_koil,
+    current_cancel_event,
+    koil_running_elsewhere,
+)
 from koil.loop import Koil, KoilProtocol
 
 
@@ -54,6 +61,30 @@ KoilType = TypeVar("KoilType", bound=KoilProtocol)
 logger = logging.getLogger(__name__)
 
 
+def _warn_if_context_was_lost(entered: object) -> None:
+    """Warn when an object is about to start a second loop next to a running one.
+
+    Called when nothing ambient was found. If a koil loop runs in this process
+    all the same, this is almost always a thread started inside ``with Koil():``
+    (or inside an entered client) that did not carry the context along: the
+    object then silently gets a loop of its own and cannot share anything with
+    what lives on the other one. Entering ``with Koil():`` explicitly in a
+    thread is a decision and does not warn.
+    """
+    if koil_running_elsewhere():
+        warnings.warn(
+            f"{entered!r} is entered in thread {threading.current_thread().name!r}, "
+            "which does not see the koil context already running in this process, "
+            "so it starts a second event loop of its own. Clients entered on the "
+            "other loop cannot be shared with it. "
+            f"{THREAD_STYLE_HINT} "
+            "If a separate loop is what you want, enter `with Koil():` in the "
+            "thread yourself.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
 @overload
 def koilable(maybe_cls: type[T]) -> type[T]: ...
 
@@ -83,6 +114,12 @@ def koilable(
         add_connectors (bool, optional): If True, it will add the connectors to the class. Defaults to False.
         fieldname (str, optional): The name of the field to store the koil instance. Defaults to "__koil".
 
+    ``with obj:`` behaves like ``async with obj:``: an ``__aexit__`` that
+    returns a true value suppresses the exception, the Koil the block started
+    is stopped even when ``__aexit__`` raises, and ``__aexit__`` runs shielded
+    from the cancellation of the worker thread it runs in (see
+    :func:`~koil.context.shielded`).
+
     Note on tracebacks: the generated ``__enter__``/``__exit__`` wrappers are
     marked with ``__tracebackhide__`` so pytest hides them, but plain Python
     tracebacks through ``with MyKoilable():`` show two koil frames (the
@@ -110,25 +147,43 @@ def koilable(
             )
         setattr(cls, "__koilable__", True)
 
+        # Whether each (possibly nested) enter of an instance started the Koil
+        # it runs on. Only that enter's exit may stop the loop again: an inner
+        # `with obj:` on an object that already owns its loop must leave it
+        # running for the outer block.
+        owned_field = fieldname + "_owned"
+
+        def push_owned(self: Koilable, owned: bool) -> None:
+            stack = getattr(self, owned_field, None)
+            if stack is None:
+                stack = []
+                setattr(self, owned_field, stack)
+            stack.append(owned)
+
         def koiled_enter(self: Koilable):
             __tracebackhide__ = True
-            potential_koiled_loop = global_koil.get()
-            if potential_koiled_loop is not None:
+            if ambient_koil() is not None:
                 # We are in a koiled loop no need to koil again
-                return unkoil(self.__aenter__)
-            else:
-                if not hasattr(self, fieldname) or getattr(self, fieldname) is None:
-                    setattr(self, fieldname, Koil())
+                result = unkoil(self.__aenter__)
+                push_owned(self, False)
+                return result
 
-                koil = getattr(self, fieldname)
-                koil.__enter__()
-                try:
-                    return unkoil(self.__aenter__)
-                except BaseException:
-                    # Don't leak the just-started Koil (and its loop thread)
-                    # when __aenter__ fails — __exit__ will never run.
-                    koil.__exit__(None, None, None)
-                    raise
+            koil = getattr(self, fieldname, None)
+            if koil is None:
+                _warn_if_context_was_lost(self)
+                koil = Koil()
+                setattr(self, fieldname, koil)
+
+            koil.__enter__()
+            try:
+                result = unkoil(self.__aenter__)
+            except BaseException:
+                # Don't leak the just-started Koil (and its loop thread)
+                # when __aenter__ fails — __exit__ will never run.
+                koil.__exit__(None, None, None)
+                raise
+            push_owned(self, True)
+            return result
 
         def koiled_exit(
             self: Koilable,
@@ -137,13 +192,27 @@ def koilable(
             exc_tb: TracebackType | None,
         ):
             __tracebackhide__ = True
-            unkoil(self.__aexit__, exc_type, exc_val, exc_tb)
-            koil = getattr(self, fieldname, None)
-            if koil is not None:
-                koil.__exit__(None, None, None)
+            stack = getattr(self, owned_field, None)
+            # No record (entered some other way): fall back to exiting the
+            # stored Koil, which is a no-op unless it runs the loop.
+            owned = stack.pop() if stack else True
+            # Teardown has to run even when the worker thread running it was
+            # cancelled — that is usually *why* it is running.
+            token = current_cancel_event.set(None)
+            try:
+                # Return __aexit__'s value so exception suppression propagates.
+                return unkoil(self.__aexit__, exc_type, exc_val, exc_tb)
+            finally:
+                current_cancel_event.reset(token)
+                # Even when __aexit__ raised: the loop thread must not outlive
+                # the block that started it.
+                if owned:
+                    koil = getattr(self, fieldname, None)
+                    if koil is not None:
+                        koil.__exit__(None, None, None)
 
         def koiled_param_exit(self: Koilable):
-            koiled_exit(self, None, None, None)
+            return koiled_exit(self, None, None, None)
 
         async def aexit(self: Koilable):
             return await self.__aexit__(None, None, None)
@@ -300,7 +369,9 @@ class _KoiledContextManager(Generic[TCM]):
 
     def __enter__(self) -> TCM:
         __tracebackhide__ = True
-        if global_koil.get() is None:
+        if ambient_koil() is None:
+            if self._koil is None:
+                _warn_if_context_was_lost(self._acm)
             self._own_koil = self._koil if self._koil is not None else Koil()
             self._own_koil.__enter__()
         try:
@@ -320,10 +391,14 @@ class _KoiledContextManager(Generic[TCM]):
         exc_tb: TracebackType | None,
     ) -> bool | None:
         __tracebackhide__ = True
+        # Shielded like a koilable's __exit__: teardown runs even in a
+        # cancelled worker.
+        token = current_cancel_event.set(None)
         try:
             # Return __aexit__'s value so exception suppression propagates.
             return unkoil(self._acm.__aexit__, exc_type, exc_val, exc_tb)
         finally:
+            current_cancel_event.reset(token)
             if self._own_koil is not None:
                 self._own_koil.__exit__(None, None, None)
                 self._own_koil = None

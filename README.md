@@ -99,6 +99,7 @@ with Koil(
     shutdown_join_timeout=None,  # extra grace on teardown (None = 5.0s default)
     rewrite_tracebacks=True,   # hide koil-internal frames in user tracebacks
     cancel_timeout=2.0,        # grace for workers to acknowledge cancellation
+    max_workers=None,          # bound on run_threaded worker threads (None = default)
 ):
     ...
 ```
@@ -111,9 +112,11 @@ with Koil(
 | `rewrite_tracebacks` | `True` | Prune koil's internal machinery frames from the tracebacks of exceptions that cross a bridge, keeping exactly one koil frame as a marker (see below). |
 | `cancel_timeout` | `2.0` | How long, in seconds, koil waits for a cancelled worker to acknowledge cancellation: when a `run_threaded` task is cancelled, when a `*_with_timeout` deadline expires, and as the initial graceful wait in `__exit__`. Also settable as a plain attribute after construction. |
 
+| `max_workers` | `None` | Upper bound on the threads `run_threaded` runs sync code on. A `Koil` owns its worker pool — daemon threads, started on demand, separate from the loop's default executor (which the loop needs for itself, e.g. for name resolution). `None` uses `koil.loop.DEFAULT_MAX_WORKERS` (at least 64). It bounds how many sync functions can *block* at once: sync code waiting on async code waiting on sync code holds one thread per level. |
+
 One knob lives as a module attribute rather than a constructor argument:
 
-- `koil.utils.RESULT_POLL_INTERVAL` (default `0.05`) — how often a blocking `result()`/`unkoil` call wakes up so a pending Ctrl+C is delivered promptly. Smaller values make Ctrl+C more responsive at the cost of slightly more idle wakeups. It adds no latency to fast tasks. It is process-wide (a signal-delivery concern, not a per-loop one); override per call via `result(poll_interval=...)`.
+- `koil.utils.RESULT_POLL_INTERVAL` (default `0.05`) — how often a `result()`/`unkoil` call blocking the *main thread* wakes up so a pending Ctrl+C is delivered promptly (other threads never receive signals and block without polling). Smaller values make Ctrl+C more responsive at the cost of slightly more idle wakeups. It adds no latency to fast tasks. It is process-wide (a signal-delivery concern, not a per-loop one); override per call via `result(poll_interval=...)`.
 
 ### Traceback rewriting
 
@@ -164,7 +167,7 @@ Two things to keep in mind:
 
 ### One thread, many calls
 
-The background loop thread is created **once** when you enter the `Koil` context. Every subsequent `unkoil`, `unkoil_gen`, or `unkoil_task` call posts a coroutine to that existing thread via `asyncio.run_coroutine_threadsafe` — no new threads are spawned per call. The calling thread blocks on a `concurrent.futures.Future` until the result arrives; the loop thread continues processing other tasks in the meantime.
+The background loop thread is created **once** when you enter the `Koil` context. Every subsequent `unkoil`, `unkoil_gen`, or `unkoil_task` call posts a coroutine to that existing thread, where it runs as a single task — no new threads are spawned per call. The calling thread blocks on a `concurrent.futures.Future` until the result arrives; the loop thread continues processing other tasks in the meantime.
 
 This matters in practice. Calling `unkoil` a thousand times inside a `with Koil():` block creates one thread total, not a thousand. Multiple `@koilable` objects entered inside the same `Koil` context all share that single loop thread too.
 
@@ -335,20 +338,49 @@ async def run():
         pass   # long_job was interrupted cleanly
 ```
 
+Once a worker is cancelled it *stays* cancelled: every later `check_cancelled()`, `sleep()` and `unkoil()` in it raises `ThreadCancelledError`. That is what makes it stop — and it would also stop the cleanup on its way out. Cleanup that still has to call async code goes inside `shielded()`:
+
+```python
+from koil import shielded, unkoil
+
+def long_job(connection) -> None:
+    try:
+        work(connection)
+    finally:
+        with shielded():               # the cancel signal is hidden in here
+            unkoil(connection.aclose)
+```
+
+The `__exit__` of a `@koilable` class and of `koiled_cm` is shielded already, so `with client:` inside a worker tears down properly when the worker is cancelled. Keep shielded blocks short: a cancelled worker is only waited on for `cancel_timeout` seconds.
+
+A call that is cancelled while still queued for a free worker never starts.
+
 ### Cancelling from the sync side (`unkoil_task`)
 
 ```python
-from koil import Koil, unkoil_task
+from koil import CancelledError, Koil, unkoil_task
 
 with Koil():
     future = unkoil_task(some_long_coroutine)
     # later:
-    future.cancel()   # sets the cancel event on the koil loop
+    future.cancel()   # cancels the coroutine on the koil loop — this future only
+    try:
+        future.result()
+    except CancelledError:
+        ...
 ```
+
+### Which exception means "cancelled"
+
+| Raised in sync code | When |
+|---|---|
+| `koil.ThreadCancelledError` | The worker thread running the code was cancelled: from `check_cancelled()`, `sleep()`, and from an `unkoil()` that was running or is attempted afterwards. |
+| `koil.CancelledError` | A `KoilFuture` was cancelled, or the koil loop shut down before the call finished (a blocked caller is released, not left hanging). It is also a `concurrent.futures.CancelledError`. |
+| `koil.KoilTimeoutError` | A `*_with_timeout` deadline expired (see [Timeouts](#timeouts)). |
 
 ### Cancellation-aware sleep
 
-`koil.sleep` is a drop-in replacement for `time.sleep` inside koil worker threads. It respects cancellation and does not block the event loop:
+`koil.sleep` is a drop-in replacement for `time.sleep` inside koil worker threads. It wakes the moment the worker is cancelled:
 
 ```python
 from koil import sleep, check_cancelled
@@ -363,7 +395,7 @@ def worker():
 
 ## Context variable propagation
 
-`ContextVar` values are copied from the calling context into the coroutine and back again, in both bridge directions. Code inside the async loop sees the same context as the sync caller, and any changes made inside the coroutine are visible to the caller after `unkoil` returns.
+`ContextVar` values are copied from the calling context into the coroutine and back again, in both bridge directions. Code inside the async loop sees the same context as the sync caller, and any changes made inside the coroutine are visible to the caller after `unkoil` returns. Only what the coroutine actually *changed* comes back, so a detached `unkoil_task` does not undo what its caller set in the meantime.
 
 ```python
 from contextvars import ContextVar

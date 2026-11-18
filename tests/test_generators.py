@@ -48,9 +48,8 @@ async def test_thread_safe_event_clear_from_background_thread():
         loop.call_soon_threadsafe(cleared_signal.set)
 
     # Start with the event set.
-    await loop.run_in_executor(None, lambda: None)  # ensure loop is warm
-    loop.call_soon_threadsafe(event._loop.call_soon_threadsafe, super(KoilThreadSafeEvent, event).set)  # type: ignore[misc]
-    await asyncio.sleep(0.005)  # let the set propagate
+    event.set()
+    assert event.is_set()
 
     t = threading.Thread(target=clearer, daemon=True)
     t.start()

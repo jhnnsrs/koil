@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import inspect
 import logging
+import threading
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -13,16 +14,19 @@ from typing import (
 )
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Awaitable
 from koil.bridge import get_koiled_loop_or_raise
+from koil.context import blocked_calls, current_callback
 from koil.protocols import SignalProtocol
 from qtpy import QtCore, QtWidgets
 from koil.loop import Koil
 from koil.utils import (
+    _call_threadsafe,
+    _context_delta,
     run_async_sharing_context,
     iterate_async_sharing_context,
 )
 import uuid
 from .utils import KoilFuture
-from .errors import CancelledError
+from .errors import CancelledError, KoilError
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,46 @@ def _set_future_result(fut: "asyncio.Future[Any]", result: Any) -> None:
         logger.warning(f"Future {fut} already done. Ignoring result.")
         return
     fut.set_result(result)
+
+
+def _current_loop() -> asyncio.AbstractEventLoop:
+    """The loop a Qt future/generator hands its values to: the one it is created on."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.get_event_loop()
+
+
+def _context_if_own(target: object) -> contextvars.Context | None:
+    """The current context, if it is the one *target*'s slot was called in.
+
+    A Qt future is often resolved later, from an unrelated slot (the user
+    clicked a button): that slot runs in whatever context the Qt thread has —
+    possibly the one of *another* call — and none of it belongs in the task
+    awaiting this future.
+    """
+    if current_callback.get() is target:
+        return contextvars.copy_context()
+    return None
+
+
+def _refuse_deadlock(thread_ident: int, slot: Any) -> None:
+    """Raise if the Qt thread is blocked waiting for the very task calling it.
+
+    ``unkoil()`` on the Qt thread blocks that thread until the coroutine
+    returns; a coroutine that in turn waits for a slot on the Qt thread can
+    then never finish. Called from the awaiting task.
+    """
+    chain = blocked_calls.get()
+    if not chain or chain[-1].task is not asyncio.current_task():
+        return
+    if any(call.active and call.thread == thread_ident for call in chain):
+        raise KoilError(
+            f"Deadlock: {slot!r} has to run on the Qt thread, but that thread is "
+            "blocked in unkoil() waiting for the coroutine that is calling it. "
+            "Do not block the Qt thread on async code that calls back into Qt: "
+            "start it with async_to_qt (or unkoil_task) and react to its signals."
+        )
 
 
 def _set_future_exception(fut: "asyncio.Future[Any]", exc: BaseException) -> None:
@@ -101,16 +145,18 @@ class QtFuture(QtCore.QObject, Generic[T]):
     ):
         super().__init__(parent=parent)
         self.id = uuid.uuid4().hex
-        self.loop = asyncio.get_event_loop()
-        self.aiofuture: asyncio.Future[tuple[contextvars.Context, T]] = asyncio.Future()
+        self.loop = _current_loop()
+        self.aiofuture: asyncio.Future[tuple[contextvars.Context | None, T]] = (
+            self.loop.create_future()
+        )
         self.iscancelled = False
         self.resolved = False
         self.rejected = False
 
     def set_cancelled(self):
         """WIll be called by the asyncio loop"""
-        self.cancelled.emit()
         self.iscancelled = True
+        self.cancelled.emit(CancelledError("The awaiting task was cancelled"))
 
     @property
     def done(self):
@@ -121,18 +167,18 @@ class QtFuture(QtCore.QObject, Generic[T]):
         return self.aiofuture.cancelled()
 
     def resolve(self, returns: T):
-        ctx = contextvars.copy_context()
+        ctx = _context_if_own(self)
         self.resolved = True
         # The done-check is performed on the loop thread inside the callback so
         # it is race-free with any concurrent resolve()/reject() (see
         # _set_future_result).
-        self.loop.call_soon_threadsafe(
-            _set_future_result, self.aiofuture, (ctx, returns)
-        )
+        # A loop that is gone has nobody left waiting on it: a late answer
+        # from the Qt side is dropped rather than raised into its slot.
+        _call_threadsafe(self.loop, _set_future_result, self.aiofuture, (ctx, returns))
 
     def reject(self, exp: Exception):
         self.rejected = True
-        self.loop.call_soon_threadsafe(_set_future_exception, self.aiofuture, exp)
+        _call_threadsafe(self.loop, _set_future_exception, self.aiofuture, exp)
 
 
 class QtStopIteration(Exception):
@@ -158,7 +204,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
     def __init__(self):
         super().__init__()
         self.id = uuid.uuid4().hex
-        self.loop = asyncio.get_event_loop()
+        self.loop = _current_loop()
         # A queue, not one future: Qt may hand over several values before the
         # loop takes the first, and each of them is to be yielded once.
         self.queue: asyncio.Queue[
@@ -172,19 +218,19 @@ class QtGenerator(QtCore.QObject, Generic[T]):
 
     def next(self, args: T):
         """Yield a value. Called from the Qt loop."""
-        context = contextvars.copy_context()
+        context = _context_if_own(self)
 
-        self.loop.call_soon_threadsafe(self.queue.put_nowait, (context, args, None))
+        _call_threadsafe(self.loop, self.queue.put_nowait, (context, args, None))
 
     def throw(self, exception: BaseException):
         """End the generator with an exception. Called from the Qt loop."""
-        self.loop.call_soon_threadsafe(self.queue.put_nowait, (None, None, exception))
+        _call_threadsafe(self.loop, self.queue.put_nowait, (None, None, exception))
 
     def stop(self):
         """End the generator: what was yielded before is still delivered."""
         self.throw(QtStopIteration())
 
-    async def anext(self) -> tuple[contextvars.Context, T]:
+    async def anext(self) -> tuple[contextvars.Context | None, T]:
         """The next value and the context it was yielded in. Called in the asyncio loop.
 
         Raises:
@@ -193,7 +239,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         context, value, exception = await self.queue.get()
         if exception is not None:
             raise exception
-        return cast(contextvars.Context, context), cast(T, value)
+        return context, cast(T, value)
 
 
 class qt_to_async(QtCore.QObject, Generic[T, P]):
@@ -214,7 +260,13 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
         )
         self.coro = coro
         self.timeout = timeout
+        # The thread our slot runs on: the one this object lives on.
+        self._thread_ident = threading.get_ident()
         self._called.connect(self.on_called)
+
+    def _invoke(self, qtfuture: QtFuture[T], args: Any, kwargs: Any) -> None:
+        current_callback.set(qtfuture)
+        self.coro(qtfuture, *args, **kwargs)
 
     def on_called(
         self,
@@ -230,7 +282,7 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
             # caller's values there forever, so the next slot -- belonging to
             # another caller, or to none -- read whatever the last one happened
             # to leave behind.
-            ctx.run(self.coro, qtfuture, *args, **kwargs)  # type: ignore
+            ctx.run(self._invoke, qtfuture, args, kwargs)
 
         except Exception as e:
             logger.error(
@@ -240,23 +292,32 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
 
     async def acall(self, *args: P.args, **kwargs: P.kwargs) -> T:
         __tracebackhide__ = True
+        _refuse_deadlock(self._thread_ident, self.coro)
         qtfuture: QtFuture[T] = QtFuture()
+        # The slot runs in (and mutates) `ctx`; `baseline` stays as the task
+        # had it, to tell what the slot changed.
         ctx = contextvars.copy_context()
+        baseline = contextvars.copy_context()
         self._called.emit((qtfuture, args, kwargs, ctx))
         try:
-            if self.timeout:
+            if self.timeout is not None:
                 context, x = await asyncio.wait_for(
                     qtfuture.aiofuture, timeout=self.timeout
                 )
             else:
                 context, x = await qtfuture.aiofuture
 
-            for var, value in context.items():
-                var.set(value)
+            if context is not None:
+                # Only what the slot itself changed, and only when the future
+                # was resolved in the slot's own context.
+                for var, value in _context_delta(context, baseline):
+                    var.set(value)
 
             return x
 
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, TimeoutError):
+            # Either way nobody is waiting any more; let the Qt side know so
+            # it can take down whatever it put up for this call.
             qtfuture.set_cancelled()
             self.cancelled.emit(qtfuture)
             raise
@@ -280,7 +341,12 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         )
         self.coro = coro
         self.timeout = timeout
+        self._thread_ident = threading.get_ident()
         self._called.connect(self.on_called)
+
+    def _invoke(self, qtgenerator: QtGenerator[T], args: Any, kwargs: Any) -> None:
+        current_callback.set(qtgenerator)
+        self.coro(qtgenerator, *args, **kwargs)
 
     def on_called(
         self,
@@ -293,7 +359,7 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         try:
             # Scoped to the call, not left on the Qt main thread -- see
             # ``qt_to_async.on_called``.
-            ctx.run(self.coro, qtgenerator, *args, **kwargs)  # type: ignore
+            ctx.run(self._invoke, qtgenerator, args, kwargs)
 
         except Exception as e:
             logger.error(
@@ -303,14 +369,16 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
 
     async def acall(self, *args: P.args, **kwargs: P.kwargs) -> AsyncGenerator[T, None]:
         __tracebackhide__ = True
+        _refuse_deadlock(self._thread_ident, self.coro)
         qtgenerator: QtGenerator[T] = QtGenerator()
         ctx = contextvars.copy_context()
+        baseline = contextvars.copy_context()
         self._called.emit((qtgenerator, args, kwargs, ctx))
 
         try:
             while True:
                 try:
-                    if self.timeout:
+                    if self.timeout is not None:
                         context, result = await asyncio.wait_for(
                             qtgenerator.anext(), timeout=self.timeout
                         )
@@ -319,12 +387,13 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
                 except QtStopIteration:
                     return
 
-                for var, value in context.items():
-                    var.set(value)
+                if context is not None:
+                    for var, value in _context_delta(context, baseline):
+                        var.set(value)
 
                 yield result
 
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, TimeoutError):
             qtgenerator.set_cancelled()
             self.cancelled.emit(qtgenerator)
             raise
