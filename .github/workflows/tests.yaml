@@ -47,10 +47,9 @@ jobs:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest]
         experimental: [false]
-        include:
-          - python-version: "3.14t"
-            os: ubuntu-latest
-            experimental: true
+        # No free-threaded (3.14t) entry here: PyQt5 ships no wheel for those
+        # builds (its abi3 wheels do not apply to them) and cannot be built
+        # from source on the runner, so the job could only ever fail at install.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
