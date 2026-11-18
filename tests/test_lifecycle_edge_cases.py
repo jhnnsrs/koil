@@ -6,6 +6,7 @@ copies) rather than on the happy path.
 import asyncio
 import contextvars
 import logging
+import sys
 import warnings
 import threading
 import time
@@ -393,7 +394,12 @@ def in_thread(target: Any) -> list[Any]:
                 outcome.append(e)
             outcome.append([w for w in caught if w.category is RuntimeWarning])
 
-    thread = threading.Thread(target=body, name="plain-thread")
+    # An empty context is what a thread starts with by default; free-threaded
+    # builds inherit the starter's instead, so ask for it where that is possible.
+    fresh: dict[str, Any] = (
+        {"context": contextvars.Context()} if sys.version_info >= (3, 14) else {}
+    )
+    thread = threading.Thread(target=body, name="plain-thread", **fresh)
     thread.start()
     thread.join(10)
     return outcome

@@ -331,6 +331,21 @@ def _reason_error(
     return CancelledError("The call was cancelled on the koil loop")
 
 
+def _waiter(future: "concurrent.futures.Future[Any]") -> threading.Event:
+    """An event that is set once *future* is done, for a thread to wait on.
+
+    Deliberately not :func:`concurrent.futures.wait`: that helper takes the
+    future's own lock in plain Python code, and a KeyboardInterrupt landing
+    right there (this is where the main thread sits while it waits for Ctrl+C)
+    leaves the lock held for good. The loop thread then blocks forever trying
+    to resolve the future, and with it every later call. Waiting on a private
+    event keeps an interrupt away from any lock the loop needs.
+    """
+    done = threading.Event()
+    future.add_done_callback(lambda _: done.set())
+    return done
+
+
 def _track(
     loop: asyncio.AbstractEventLoop, future: "concurrent.futures.Future[Any]"
 ) -> None:
@@ -415,8 +430,7 @@ class _KoilFutureBase(Generic[T]):
         self._timed_out = True
         self.cancel(reason=f"timeout after {timeout}s")
         grace = _cancel_grace(global_koil.get())
-        done, _ = concurrent.futures.wait([self.future], timeout=grace)
-        if not done:
+        if not _waiter(self.future).wait(grace):
             return KoilTimeoutError(
                 f"Task did not complete within {timeout}s and did not "
                 f"acknowledge cancellation within the {grace}s grace period. "
@@ -482,15 +496,16 @@ class _KoilFutureBase(Generic[T]):
         try:
             # Wait in bounded slices so a pending Ctrl+C on the main thread is
             # delivered between slices instead of deferred until the task
-            # completes. Use the non-raising concurrent.futures.wait() rather
-            # than result(timeout=...): on 3.11 concurrent.futures.TimeoutError
+            # completes. Wait on an event (see _waiter) rather than
+            # result(timeout=...): on 3.11 concurrent.futures.TimeoutError
             # *is* the builtin TimeoutError, so catching a result() timeout would
             # also swallow a real TimeoutError raised by the coroutine and spin
-            # forever. wait() never raises, so the subsequent result() re-raises
-            # the coroutine's actual exception (TimeoutError included).
+            # forever. The event wait never raises, so the subsequent result()
+            # re-raises the coroutine's actual exception (TimeoutError included).
             # A done() check always precedes the deadline check, so a completed
             # future returns its result even with timeout=0.
-            while not self.future.done():
+            done = None if self.future.done() else _waiter(self.future)
+            while done is not None and not done.is_set():
                 slice_timeout = interval
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
@@ -499,7 +514,7 @@ class _KoilFutureBase(Generic[T]):
                     slice_timeout = (
                         remaining if interval is None else min(interval, remaining)
                     )
-                concurrent.futures.wait([self.future], timeout=slice_timeout)
+                done.wait(slice_timeout)
             res, context = self.future.result()
         except CancelledError:
             raise
@@ -990,7 +1005,7 @@ class AsyncGenDriver(Generic[T]):
         last = self._last
         if last is not None and not last.future.done():
             last.cancel(reason="generator closed")
-            concurrent.futures.wait([last.future], timeout=CANCEL_GRACE_FALLBACK)
+            _waiter(last.future).wait(CANCEL_GRACE_FALLBACK)
 
         if self._loop.is_closed():
             return
@@ -1013,8 +1028,7 @@ class AsyncGenDriver(Generic[T]):
             # Loop stopped between the check and the submission.
             return
 
-        done, _ = concurrent.futures.wait([close_future], timeout=ACLOSE_TIMEOUT)
-        if not done:
+        if not _waiter(close_future).wait(ACLOSE_TIMEOUT):
             logger.warning(
                 "Timed out after %.1fs closing async generator %r on the koil loop; "
                 "it may be wedged on uncancellable work.",
