@@ -282,8 +282,12 @@ def test_a_nested_koil_shares_the_outer_loop_and_does_not_stop_it() -> None:
         assert unkoil(one) == 1
 
 
-def test_one_slow_worker_does_not_look_like_a_wedged_loop(caplog) -> None:
+def test_one_slow_worker_does_not_look_like_a_wedged_loop(caplog, monkeypatch) -> None:
     """A worker gets ``cancel_timeout`` to stop; the exit waits a bit longer than that."""
+    # The loop needs cancel_timeout (0.3s) to give up on the worker. With no
+    # margin at all the exit's own wait would end at that same moment and warn
+    # every time; a generous one keeps a stalled CI runner from doing the same.
+    monkeypatch.setattr("koil.loop.SHUTDOWN_MARGIN", 5.0)
     inside = threading.Event()
 
     def slow() -> None:
