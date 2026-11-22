@@ -7,6 +7,7 @@ The generator lives in one task on the koil loop for its whole life; every
 import asyncio
 import contextvars
 import threading
+from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -14,7 +15,7 @@ from koil import Koil, KoilTimeoutError, unkoil_gen, unkoil_gen_with_timeout
 
 
 def test_send_reaches_the_async_generator() -> None:
-    async def echo():
+    async def echo() -> AsyncGenerator[str, str]:
         received = yield "ready"
         while received != "stop":
             received = yield f"got {received}"
@@ -29,7 +30,7 @@ def test_send_reaches_the_async_generator() -> None:
 
 
 def test_send_with_a_timeout_per_step() -> None:
-    async def doubler():
+    async def doubler() -> AsyncGenerator[int, int]:
         value = yield 0
         while True:
             value = yield value * 2
@@ -44,7 +45,7 @@ def test_send_with_a_timeout_per_step() -> None:
 
 @pytest.mark.parametrize("timeout", [None, 5])
 def test_an_empty_generator_just_ends(timeout: float | None) -> None:
-    async def empty():
+    async def empty() -> AsyncGenerator[None, None]:
         return
         yield  # pragma: no cover
 
@@ -58,7 +59,7 @@ def test_an_empty_generator_just_ends(timeout: float | None) -> None:
 def test_every_step_runs_in_the_same_task() -> None:
     """What a generator holds across a yield belongs to the task that entered it."""
 
-    async def agen():
+    async def agen() -> AsyncGenerator[int | bool, None]:
         first = asyncio.current_task()
         yield 1
         yield asyncio.current_task() is first
@@ -71,7 +72,7 @@ def test_every_step_runs_in_the_same_task() -> None:
 def test_a_task_group_survives_the_yields() -> None:
     """A TaskGroup entered before a yield is exited by the same task after it."""
 
-    async def agen():
+    async def agen() -> AsyncGenerator[str | list[int], None]:
         results: list[int] = []
 
         async def work(i: int) -> None:
@@ -92,7 +93,7 @@ def test_a_task_group_survives_the_yields() -> None:
 def test_breaking_out_runs_the_cleanup_before_the_loop_continues() -> None:
     closed = threading.Event()
 
-    async def agen():
+    async def agen() -> AsyncGenerator[int, None]:
         try:
             while True:
                 yield 1
@@ -107,7 +108,7 @@ def test_breaking_out_runs_the_cleanup_before_the_loop_continues() -> None:
 
 
 def test_a_cleanup_error_on_early_close_reaches_the_consumer() -> None:
-    async def agen():
+    async def agen() -> AsyncGenerator[int, None]:
         try:
             yield 1
             yield 2
@@ -124,7 +125,7 @@ def test_a_cleanup_error_on_early_close_reaches_the_consumer() -> None:
 def test_throwing_into_the_consumer_closes_the_async_generator() -> None:
     closed = threading.Event()
 
-    async def agen():
+    async def agen() -> AsyncGenerator[int, None]:
         try:
             yield 1
             yield 2
@@ -140,7 +141,7 @@ def test_throwing_into_the_consumer_closes_the_async_generator() -> None:
 
 
 def test_an_exception_ends_the_generator() -> None:
-    async def agen():
+    async def agen() -> AsyncGenerator[int, None]:
         yield 1
         raise ValueError("boom")
 
@@ -156,7 +157,7 @@ def test_an_exception_ends_the_generator() -> None:
 def test_each_step_sees_the_consumers_context_and_hands_changes_back() -> None:
     var: contextvars.ContextVar[str] = contextvars.ContextVar("step_var")
 
-    async def agen():
+    async def agen() -> AsyncGenerator[str, None]:
         seen = var.get()
         var.set("gen-1")
         yield seen
@@ -180,7 +181,7 @@ def test_each_step_sees_the_consumers_context_and_hands_changes_back() -> None:
 def test_a_step_timeout_cancels_the_generator_and_runs_its_finally() -> None:
     cleaned = threading.Event()
 
-    async def slow():
+    async def slow() -> AsyncGenerator[int, None]:
         try:
             yield 1
             await asyncio.sleep(30)
@@ -197,7 +198,7 @@ def test_a_step_timeout_cancels_the_generator_and_runs_its_finally() -> None:
 
 
 def test_the_timeout_is_per_step_not_for_the_whole_generator() -> None:
-    async def steady():
+    async def steady() -> AsyncGenerator[int, None]:
         for i in range(5):
             await asyncio.sleep(0.05)
             yield i
@@ -228,7 +229,7 @@ def test_a_plain_async_iterator_works_too() -> None:
 
 
 def test_many_items_come_through_in_order() -> None:
-    async def count(n: int):
+    async def count(n: int) -> AsyncGenerator[int, None]:
         for i in range(n):
             yield i
 
@@ -237,7 +238,7 @@ def test_many_items_come_through_in_order() -> None:
 
 
 def test_two_generators_interleave_independently() -> None:
-    async def count(start: int):
+    async def count(start: int) -> AsyncGenerator[int, None]:
         for i in range(start, start + 3):
             await asyncio.sleep(0)
             yield i

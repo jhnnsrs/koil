@@ -18,12 +18,12 @@ import asyncio
 import concurrent.futures
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 
 import pytest
 
 from koil.bridge import run_threaded, unkoil, unkoil_gen, unkoil_task
-from koil.context import current_cancel_event, global_koil_loop
+from koil.context import KoilThreadSafeEvent, current_cancel_event, global_koil_loop
 from koil.loop import Koil, get_threaded_loop
 
 
@@ -51,7 +51,7 @@ async def _quick() -> int:
     return 42
 
 
-async def _quick_gen():
+async def _quick_gen() -> AsyncGenerator[int, None]:
     for i in range(5):
         await asyncio.sleep(0)
         yield i
@@ -61,7 +61,7 @@ async def _quick_gen():
 # A1 - the cancel bridge must not spawn a helper thread per call
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(30)
-def test_unkoil_does_not_spawn_helper_threads():
+def test_unkoil_does_not_spawn_helper_threads() -> None:
     """The cancel signal is now a thread-safe asyncio.Event awaited directly in
     the loop, so no bridging thread is created. Previously ``unkoil`` spawned a
     daemon thread per call and ``unkoil_gen`` spawned one *per yielded item*;
@@ -92,7 +92,7 @@ def test_unkoil_does_not_spawn_helper_threads():
 # A2 - shutdown must join the loop thread and actually close the loop
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(15)
-def test_exit_closes_loop_and_joins_thread():
+def test_exit_closes_loop_and_joins_thread() -> None:
     k = Koil()
     k.__enter__()
     loop = k._loop
@@ -111,7 +111,7 @@ def test_exit_closes_loop_and_joins_thread():
 
 
 @pytest.mark.timeout(15)
-def test_double_exit_is_safe():
+def test_double_exit_is_safe() -> None:
     """A second __exit__ must not call stop() on an already-closed loop."""
     k = Koil()
     k.__enter__()
@@ -121,7 +121,7 @@ def test_double_exit_is_safe():
 
 
 @pytest.mark.timeout(30)
-def test_repeated_cycles_do_not_accumulate_loop_threads():
+def test_repeated_cycles_do_not_accumulate_loop_threads() -> None:
     # Guards that each __exit__ winds its loop thread down before the next
     # cycle. (The pre-fix busy-wait usually achieved this too; this is a
     # robustness guard for the join-based shutdown, not a strict A2 regression.)
@@ -142,7 +142,7 @@ def test_repeated_cycles_do_not_accumulate_loop_threads():
 # A3 - concurrent Koil entry must not race on the global event-loop policy
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(30)
-def test_concurrent_koil_entry_is_safe():
+def test_concurrent_koil_entry_is_safe() -> None:
     # Concurrency smoke test: 12 threads racing through Koil setup/teardown.
     # The policy assertion is a forward-looking invariant - the actual A3
     # regression (transient global-policy mutation) only manifests with
@@ -152,7 +152,7 @@ def test_concurrent_koil_entry_is_safe():
     errors: list[BaseException] = []
     barrier = threading.Barrier(12)
 
-    def worker():
+    def worker() -> None:
         try:
             barrier.wait()  # maximise overlap of the loop-creation window
             with Koil():
@@ -174,7 +174,9 @@ def test_concurrent_koil_entry_is_safe():
 
 
 @pytest.mark.timeout(15)
-def test_get_threaded_loop_never_mutates_global_policy(monkeypatch):
+def test_get_threaded_loop_never_mutates_global_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Loop creation must construct the desired loop directly, never via the
     process-global ``asyncio.set_event_loop_policy()`` (which races across
     concurrent ``Koil`` entries).
@@ -195,7 +197,7 @@ def test_get_threaded_loop_never_mutates_global_policy(monkeypatch):
     policy_calls: list[object] = []
     real_set = asyncio.set_event_loop_policy
 
-    def spy(policy):
+    def spy(policy: asyncio.AbstractEventLoopPolicy | None) -> None:
         policy_calls.append(policy)
         return real_set(policy)
 
@@ -222,7 +224,7 @@ def test_get_threaded_loop_never_mutates_global_policy(monkeypatch):
 # A4 - run_threaded must not leak contextvars into pooled executor threads
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(15)
-async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
+async def test_run_spawned_does_not_leak_contextvars_to_pool_thread() -> None:
     """Pin the loop to a single executor worker so the thread is guaranteed to
     be reused, then prove koil's contextvars do not survive into an unrelated
     job on that same thread."""
@@ -240,7 +242,9 @@ async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
 
     ident_inside = await run_threaded(koiled_body)
 
-    def probe():
+    def probe() -> tuple[
+        int, KoilThreadSafeEvent | None, asyncio.AbstractEventLoop | None
+    ]:
         # ...but a plain executor job on the *same* worker thread must see a
         # clean context (no leaked cancel event / loop).
         return (
@@ -257,7 +261,7 @@ async def test_run_spawned_does_not_leak_contextvars_to_pool_thread():
 
 
 @pytest.mark.timeout(15)
-async def test_concurrent_run_spawned_have_isolated_cancel_events():
+async def test_concurrent_run_spawned_have_isolated_cancel_events() -> None:
     """Concurrency smoke test: many run_threaded tasks each see their own cancel
     event - one task setting its event must not be observed by another. (Holds
     with or without the A4 fix, since each wrapper installs its own event; this
@@ -266,7 +270,7 @@ async def test_concurrent_run_spawned_have_isolated_cancel_events():
     observed: list[bool] = []
     lock = threading.Lock()
 
-    def body(self_cancel: bool):
+    def body(self_cancel: bool) -> bool:
         started.wait()
         ev = current_cancel_event.get()
         assert ev is not None
@@ -294,7 +298,7 @@ async def test_concurrent_run_spawned_have_isolated_cancel_events():
 # concurrency through a single shared koil loop
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(30)
-def test_concurrent_unkoil_into_shared_loop():
+def test_concurrent_unkoil_into_shared_loop() -> None:
     """Many OS threads submitting coroutines into one koil loop concurrently
     must all get correct, non-cross-contaminated results."""
     with Koil():
@@ -306,7 +310,7 @@ def test_concurrent_unkoil_into_shared_loop():
         errors: list[BaseException] = []
         barrier = threading.Barrier(n)
 
-        def worker(i: int):
+        def worker(i: int) -> None:
             # Threads start with a fresh context, so propagate the loop the way
             # koil's own spawn wrappers do.
             global_koil_loop.set(loop)
@@ -335,7 +339,7 @@ def test_concurrent_unkoil_into_shared_loop():
 # cancel-vs-complete race on a KoilFuture
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(30)
-def test_cancel_completion_race_never_corrupts_result():
+def test_cancel_completion_race_never_corrupts_result() -> None:
     """Cancel a task right as it is about to complete, many times. The result
     must be either the value or a CancelledError - never a hang, an
     InvalidStateError, or a wrong value."""
@@ -359,7 +363,7 @@ def test_cancel_completion_race_never_corrupts_result():
 
 
 @pytest.mark.timeout(15)
-def test_koil_future_cancel_is_prompt():
+def test_koil_future_cancel_is_prompt() -> None:
     """Cancelling a long-running KoilFuture must resolve fast (via the cancel
     event), not block until the coroutine would have finished."""
     with Koil():
@@ -383,7 +387,7 @@ def test_koil_future_cancel_is_prompt():
 # nested cancellation: unkoil() inside a run_threaded worker
 # --------------------------------------------------------------------------- #
 @pytest.mark.timeout(15)
-async def test_nested_unkoil_in_run_spawned_cancels_promptly():
+async def test_nested_unkoil_in_run_spawned_cancels_promptly() -> None:
     """unkoil() called from inside a run_threaded worker shares the worker's
     cancel event. Cancelling the outer task must promptly cancel the inner
     coroutine (it inherits and awaits the *same* thread-safe asyncio.Event), not
@@ -427,11 +431,11 @@ async def test_nested_unkoil_in_run_spawned_cancels_promptly():
 # --------------------------------------------------------------------------- #
 # B1 (Qt) - guarded future setters are race-safe. Runs only with PyQt5/CI.
 # --------------------------------------------------------------------------- #
-def test_qt_guarded_setters_ignore_double_resolution():
+def test_qt_guarded_setters_ignore_double_resolution() -> None:
     pytest.importorskip("PyQt5")
     from koil.qt import _set_future_exception, _set_future_result
 
-    async def check():
+    async def check() -> None:
         loop = asyncio.get_running_loop()
 
         f = loop.create_future()

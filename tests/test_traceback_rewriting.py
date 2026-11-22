@@ -8,6 +8,8 @@ and ``KOIL_FULL_TRACEBACK=1`` restore the full traceback.
 
 import os
 import traceback
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from typing import Never
 
 import pytest
 
@@ -29,29 +31,29 @@ from koil.tracebacks import prune_traceback
 KOIL_DIR = os.path.dirname(os.path.abspath(koil_package.__file__)) + os.sep
 
 
-def frames(e: BaseException):
+def frames(e: BaseException) -> traceback.StackSummary:
     return traceback.extract_tb(e.__traceback__)
 
 
-def koil_frames(e: BaseException):
+def koil_frames(e: BaseException) -> list[traceback.FrameSummary]:
     return [f for f in frames(e) if os.path.abspath(f.filename).startswith(KOIL_DIR)]
 
 
-def futures_frames(e: BaseException):
+def futures_frames(e: BaseException) -> list[traceback.FrameSummary]:
     return [
         f for f in frames(e) if "concurrent/futures" in f.filename.replace("\\", "/")
     ]
 
 
-async def user_async():
+async def user_async() -> Never:
     raise ValueError("boom")
 
 
-async def user_mid():
+async def user_mid() -> Never:
     return await user_async()
 
 
-def test_unkoil_prunes_machinery():
+def test_unkoil_prunes_machinery() -> None:
     with Koil():
         with pytest.raises(ValueError) as excinfo:
             unkoil(user_mid)
@@ -64,8 +66,8 @@ def test_unkoil_prunes_machinery():
     assert user_names[-2:] == ["user_mid", "user_async"]
 
 
-def test_unkoil_gen_prunes():
-    async def agen():
+def test_unkoil_gen_prunes() -> None:
+    async def agen() -> AsyncGenerator[int, None]:
         yield 1
         raise ValueError("boom in gen")
 
@@ -80,7 +82,7 @@ def test_unkoil_gen_prunes():
     assert frames(e)[-1].name == "agen"
 
 
-def test_unkoil_task_result_boundary():
+def test_unkoil_task_result_boundary() -> None:
     with Koil():
         with pytest.raises(ValueError) as excinfo:
             unkoil_task(user_mid).result()
@@ -92,11 +94,13 @@ def test_unkoil_task_result_boundary():
 
 
 @pytest.mark.parametrize("runner", [run_threaded, run_threaded_bridged])
-def test_run_threaded_prunes(runner):
-    def user_sync():
+def test_run_threaded_prunes(
+    runner: Callable[[Callable[[], Never]], Awaitable[object]],
+) -> None:
+    def user_sync() -> Never:
         raise ValueError("boom in thread")
 
-    async def main():
+    async def main() -> None:
         await runner(user_sync)
 
     with Koil():
@@ -115,12 +119,12 @@ def test_run_threaded_prunes(runner):
     assert e.__context__ is None
 
 
-def test_iterate_threaded_prunes():
-    def user_gen():
+def test_iterate_threaded_prunes() -> None:
+    def user_gen() -> Generator[int, None, None]:
         yield 1
         raise ValueError("boom in gen step")
 
-    async def main():
+    async def main() -> None:
         async for _ in iterate_threaded(user_gen):
             pass
 
@@ -136,15 +140,15 @@ def test_iterate_threaded_prunes():
     assert [f.name for f in koil_frames(e)] == ["unkoil", "_iterate_threaded"]
 
 
-def test_iterate_threaded_close_path_prunes():
-    def user_gen():
+def test_iterate_threaded_close_path_prunes() -> None:
+    def user_gen() -> Generator[int, None, None]:
         try:
             yield 1
             yield 2
         finally:
             raise ValueError("boom in finally")
 
-    async def main():
+    async def main() -> None:
         agen = iterate_threaded(user_gen)
         await agen.__anext__()
         # Explicit aclose throws GeneratorExit into the generator now (a bare
@@ -162,11 +166,11 @@ def test_iterate_threaded_close_path_prunes():
     assert names[-1] == "user_gen"
 
 
-def test_stopiteration_wrap_chain():
-    def user_sync():
+def test_stopiteration_wrap_chain() -> None:
+    def user_sync() -> Never:
         raise StopIteration("manual stop")
 
-    async def main():
+    async def main() -> None:
         await run_threaded(user_sync)
 
     with Koil():
@@ -184,7 +188,7 @@ def test_stopiteration_wrap_chain():
     assert e.__traceback__ is not None
 
 
-def test_flag_off_restores_full_frames():
+def test_flag_off_restores_full_frames() -> None:
     with Koil(rewrite_tracebacks=False):
         with pytest.raises(ValueError) as excinfo:
             unkoil(user_mid)
@@ -196,7 +200,7 @@ def test_flag_off_restores_full_frames():
     assert "_run" in names
 
 
-def test_env_var_forces_full(monkeypatch):
+def test_env_var_forces_full(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KOIL_FULL_TRACEBACK", "1")
     with Koil():
         with pytest.raises(ValueError) as excinfo:
@@ -207,8 +211,8 @@ def test_env_var_forces_full(monkeypatch):
     assert "_run" in [f.name for f in frames(e)]
 
 
-def test_chained_user_exceptions():
-    async def chained():
+def test_chained_user_exceptions() -> None:
+    async def chained() -> None:
         try:
             raise KeyError("inner")
         except KeyError as inner:
@@ -230,7 +234,7 @@ def test_chained_user_exceptions():
     ]
 
 
-def test_prune_cycle_safe():
+def test_prune_cycle_safe() -> None:
     e1 = ValueError("a")
     e2 = KeyError("b")
     e1.__context__ = e2
@@ -238,14 +242,14 @@ def test_prune_cycle_safe():
     prune_traceback(e1)  # must terminate
 
 
-def test_prune_keep_full_fallback():
+def test_prune_keep_full_fallback() -> None:
     # An exception whose every frame is hidden keeps its traceback untouched:
     # the error originated inside koil, so its frames are the informative part.
-    def hidden_raiser():
+    def hidden_raiser() -> Never:
         __tracebackhide__ = True
         raise ValueError("koil internal")
 
-    def hidden_catcher():
+    def hidden_catcher() -> ValueError | None:
         __tracebackhide__ = True
         try:
             hidden_raiser()
@@ -263,10 +267,10 @@ def test_prune_keep_full_fallback():
     assert [f.name for f in frames(e)] == original_names
 
 
-def test_cancellation_unaffected():
+def test_cancellation_unaffected() -> None:
     import asyncio
 
-    async def hang():
+    async def hang() -> None:
         await asyncio.sleep(30)
 
     with Koil():

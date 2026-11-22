@@ -8,7 +8,31 @@ aliases point at their renamed counterparts ``run_threaded`` /
 
 import importlib
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # What the names below resolve to, for type checkers; at runtime
+    # __getattr__ imports them lazily and warns.
+    from koil.bridge import (
+        KOIL_CANCEL_TIMEOUT as KOIL_CANCEL_TIMEOUT,
+    )
+    from koil.bridge import (
+        get_koiled_loop_or_raise as get_koiled_loop_or_raise,
+    )
+    from koil.bridge import iterate_threaded as iterate_threaded
+    from koil.bridge import (
+        iterate_threaded_bridged as iterate_threaded_bridged,
+    )
+    from koil.bridge import run_threaded as run_threaded
+    from koil.bridge import run_threaded_bridged as run_threaded_bridged
+    from koil.bridge import sleep as sleep
+    from koil.bridge import unkoil as unkoil
+    from koil.bridge import unkoil_gen as unkoil_gen
+    from koil.bridge import unkoil_task as unkoil_task
+    from koil.context import KoilThreadSafeEvent as KoilThreadSafeEvent
+
+    run_spawned = run_threaded
+    iterate_spawned = iterate_threaded
 
 # name -> (target module, target name)
 _DEPRECATED: dict[str, tuple[str, str]] = {
@@ -35,7 +59,7 @@ _RENAMED = {
 __all__ = list(_DEPRECATED)
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     try:
         module, target = _DEPRECATED[name]
     except KeyError:

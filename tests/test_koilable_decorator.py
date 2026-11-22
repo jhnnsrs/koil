@@ -15,29 +15,29 @@ from koil.loop import Koil
 
 @koilable(fieldname="_custom_koil")
 class CustomFieldModel:
-    def __init__(self):
+    def __init__(self) -> None:
         self._custom_koil = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "CustomFieldModel":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def _value(self):
+    async def _value(self) -> int:
         await asyncio.sleep(0)
         return 42
 
-    def get_value(self):
+    def get_value(self) -> int:
         return unkoil(self._value)
 
 
 @koilable(add_connectors=True)
 class ConnectedModel:
-    async def __aenter__(self):
+    async def __aenter__(self) -> "ConnectedModel":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
 
@@ -45,11 +45,11 @@ class ConnectedModel:
 class TrackingModel:
     entered = False
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "TrackingModel":
         self.entered = True
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         self.entered = False
 
 
@@ -58,7 +58,7 @@ class TrackingModel:
 # ---------------------------------------------------------------------------
 
 
-def test_koilable_custom_fieldname_works():
+def test_koilable_custom_fieldname_works() -> None:
     """A custom fieldname stores the Koil instance on the named attribute."""
     m = CustomFieldModel()
     with m:
@@ -68,7 +68,7 @@ def test_koilable_custom_fieldname_works():
     assert m._custom_koil is not None
 
 
-def test_koilable_add_connectors_attaches_methods():
+def test_koilable_add_connectors_attaches_methods() -> None:
     """add_connectors=True adds enter/exit/aenter/aexit helpers to the class."""
     m = ConnectedModel()
     assert callable(getattr(m, "enter", None))
@@ -77,53 +77,53 @@ def test_koilable_add_connectors_attaches_methods():
     assert callable(getattr(m, "aexit", None))
 
 
-async def test_koilable_add_connectors_aenter_aexit_work():
+async def test_koilable_add_connectors_aenter_aexit_work() -> None:
     """The aenter/aexit connectors work as async context-manager equivalents."""
     m = ConnectedModel()
     await m.aenter()
     await m.aexit()
 
 
-def test_koilable_requires_coroutine_aenter():
+def test_koilable_requires_coroutine_aenter() -> None:
     """Decorating a class whose __aenter__ is a plain function raises TypeError."""
     with pytest.raises(TypeError, match="__aenter__ must be a coroutine"):
 
         @koilable()
         class BadAenter:
-            def __aenter__(self):  # not async
+            def __aenter__(self) -> "BadAenter":  # not async
                 return self
 
-            async def __aexit__(self, *args):
+            async def __aexit__(self, *args: object) -> None:
                 pass
 
 
-def test_koilable_requires_coroutine_aexit():
+def test_koilable_requires_coroutine_aexit() -> None:
     """Decorating a class whose __aexit__ is a plain function raises TypeError."""
     with pytest.raises(TypeError, match="__aexit__ must be a coroutine"):
 
         @koilable()
         class BadAexit:
-            async def __aenter__(self):
+            async def __aenter__(self) -> "BadAexit":
                 return self
 
-            def __aexit__(self, *args):  # not async
+            def __aexit__(self, *args: object) -> None:  # not async
                 pass
 
 
-def test_koilable_requires_aexit_present():
+def test_koilable_requires_aexit_present() -> None:
     """Decorating a class with no __aexit__ at all raises a pointed TypeError."""
     with pytest.raises(TypeError, match="must implement __aexit__"):
 
         @koilable()
         class MissingAexit:
-            async def __aenter__(self):
+            async def __aenter__(self) -> "MissingAexit":
                 return self
 
 
-def test_koilable_reuses_existing_koil():
+def test_koilable_reuses_existing_koil() -> None:
     """Inside an existing Koil context, @koilable does not create a new inner Koil."""
     m = TrackingModel()
-    with Koil() as outer:
+    with Koil():
         with m:
             assert m.entered
             # No inner Koil was created — the outer loop was reused
@@ -131,7 +131,7 @@ def test_koilable_reuses_existing_koil():
     assert not m.entered
 
 
-def test_koilable_standalone_creates_koil():
+def test_koilable_standalone_creates_koil() -> None:
     """Outside any Koil context, @koilable transparently creates its own Koil."""
     m = TrackingModel()
     with m:
@@ -141,18 +141,18 @@ def test_koilable_standalone_creates_koil():
     assert not m.entered
 
 
-def test_koilable_bare_form():
+def test_koilable_bare_form() -> None:
     """@koilable without parentheses decorates the class directly."""
 
     @koilable
     class BareModel:
         entered = False
 
-        async def __aenter__(self):
+        async def __aenter__(self) -> "BareModel":
             self.entered = True
             return self
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object) -> None:
             self.entered = False
 
     assert inspect.isclass(BareModel)
@@ -163,15 +163,15 @@ def test_koilable_bare_form():
     assert not m.entered
 
 
-def test_koilable_legacy_positional_fieldname():
+def test_koilable_legacy_positional_fieldname() -> None:
     """koilable("_field") keeps the legacy positional-fieldname contract."""
 
     @koilable("_legacy_koil")
     class LegacyModel:
-        async def __aenter__(self):
+        async def __aenter__(self) -> "LegacyModel":
             return self
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object) -> None:
             pass
 
     m = LegacyModel()
@@ -179,15 +179,15 @@ def test_koilable_legacy_positional_fieldname():
         assert getattr(m, "_legacy_koil", None) is not None
 
 
-def test_koilable_enter_failure_tears_down_koil():
+def test_koilable_enter_failure_tears_down_koil() -> None:
     """A failing __aenter__ must not leak the auto-started Koil's loop thread."""
 
     @koilable()
     class FailsOnEnter:
-        async def __aenter__(self):
+        async def __aenter__(self) -> "FailsOnEnter":
             raise ValueError("boom")
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object) -> None:
             pass
 
     m = FailsOnEnter()

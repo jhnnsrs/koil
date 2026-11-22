@@ -1,7 +1,9 @@
 """Tests for the @koiled function decorator and the koiled_cm helper."""
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextvars import ContextVar
+from types import TracebackType
 
 import pytest
 
@@ -22,7 +24,7 @@ async def double(x: int) -> int:
 
 
 @koiled
-async def counting(n: int):
+async def counting(n: int) -> AsyncGenerator[int, None]:
     for i in range(n):
         await asyncio.sleep(0)
         yield i
@@ -33,37 +35,37 @@ async def counting(n: int):
 # ---------------------------------------------------------------------------
 
 
-def test_koiled_sync_call_inside_koil():
+def test_koiled_sync_call_inside_koil() -> None:
     with Koil():
         assert double(21) == 42
 
 
-async def test_koiled_async_call_returns_awaitable():
+async def test_koiled_async_call_returns_awaitable() -> None:
     assert await double(21) == 42
 
 
-async def test_koiled_aio_attribute_is_the_original():
+async def test_koiled_aio_attribute_is_the_original() -> None:
     assert await double.aio(21) == 42
     assert asyncio.iscoroutinefunction(double.aio)
 
 
-def test_koiled_sync_call_without_context_raises():
+def test_koiled_sync_call_without_context_raises() -> None:
     with pytest.raises(KoilError, match="No koil context found"):
         double(21)
 
 
-def test_koiled_generator_sync():
+def test_koiled_generator_sync() -> None:
     with Koil():
         assert list(counting(4)) == [0, 1, 2, 3]
 
 
-async def test_koiled_generator_async():
+async def test_koiled_generator_async() -> None:
     assert [i async for i in counting(4)] == [0, 1, 2, 3]
 
 
-def test_koiled_with_timeout_expires():
+def test_koiled_with_timeout_expires() -> None:
     @koiled(timeout=0.05)
-    async def slow():
+    async def slow() -> None:
         await asyncio.sleep(5)
 
     with Koil():
@@ -71,7 +73,7 @@ def test_koiled_with_timeout_expires():
             slow()
 
 
-def test_koiled_with_timeout_fast_returns():
+def test_koiled_with_timeout_fast_returns() -> None:
     @koiled(timeout=5.0)
     async def fast(x: int) -> int:
         await asyncio.sleep(0)
@@ -81,7 +83,7 @@ def test_koiled_with_timeout_fast_returns():
         assert fast(3) == 3
 
 
-def test_koiled_timeout_does_not_collide_with_user_kwarg():
+def test_koiled_timeout_does_not_collide_with_user_kwarg() -> None:
     @koiled(timeout=5.0)
     async def fn_with_timeout(timeout: float) -> float:
         await asyncio.sleep(0)
@@ -91,27 +93,27 @@ def test_koiled_timeout_does_not_collide_with_user_kwarg():
         assert fn_with_timeout(timeout=1.25) == 1.25
 
 
-def test_koiled_rejects_plain_function():
+def test_koiled_rejects_plain_function() -> None:
     with pytest.raises(TypeError, match="async def"):
 
         @koiled
-        def not_async():
+        def not_async() -> None:
             pass
 
 
-def test_koiled_rejects_decorating_classmethod_object():
+def test_koiled_rejects_decorating_classmethod_object() -> None:
     with pytest.raises(TypeError, match="above @koiled"):
 
         class C:
             @koiled
             @classmethod
-            async def method(cls):
+            async def method(cls) -> None:
                 pass
 
 
-def test_koiled_instance_method_binding():
+def test_koiled_instance_method_binding() -> None:
     class Service:
-        def __init__(self, base: int):
+        def __init__(self, base: int) -> None:
             self.base = base
 
         @koiled
@@ -123,7 +125,7 @@ def test_koiled_instance_method_binding():
         assert Service(10).offset(5) == 15
 
 
-def test_koiled_classmethod_above_koiled_works():
+def test_koiled_classmethod_above_koiled_works() -> None:
     class Service:
         base = 7
 
@@ -137,15 +139,15 @@ def test_koiled_classmethod_above_koiled_works():
         assert Service.offset(3) == 10
 
 
-def test_koiled_negative_timeout_raises_at_decoration():
+def test_koiled_negative_timeout_raises_at_decoration() -> None:
     with pytest.raises(ValueError):
 
         @koiled(timeout=-1)
-        async def fn():
+        async def fn() -> None:
             pass
 
 
-def test_koiled_contextvar_propagation():
+def test_koiled_contextvar_propagation() -> None:
     request_id: ContextVar[str] = ContextVar("request_id")
 
     @koiled
@@ -166,24 +168,29 @@ def test_koiled_contextvar_propagation():
 
 
 class AsyncResource:
-    def __init__(self, fail_on_enter: bool = False, suppress: bool = False):
+    def __init__(self, fail_on_enter: bool = False, suppress: bool = False) -> None:
         self.entered = False
         self.exited = False
         self.fail_on_enter = fail_on_enter
         self.suppress = suppress
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncResource":
         if self.fail_on_enter:
             raise ValueError("enter failed")
         self.entered = True
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool:
         self.exited = True
         return self.suppress
 
 
-def test_koiled_cm_standalone_starts_and_tears_down_koil():
+def test_koiled_cm_standalone_starts_and_tears_down_koil() -> None:
     resource = AsyncResource()
     with koiled_cm(resource) as r:
         assert r is resource
@@ -193,7 +200,7 @@ def test_koiled_cm_standalone_starts_and_tears_down_koil():
     assert global_koil.get() is None
 
 
-def test_koiled_cm_reuses_ambient_koil():
+def test_koiled_cm_reuses_ambient_koil() -> None:
     resource = AsyncResource()
     with Koil() as outer:
         with koiled_cm(resource) as r:
@@ -204,7 +211,7 @@ def test_koiled_cm_reuses_ambient_koil():
         assert global_koil.get() is outer
 
 
-def test_koiled_cm_enter_failure_tears_down_koil():
+def test_koiled_cm_enter_failure_tears_down_koil() -> None:
     resource = AsyncResource(fail_on_enter=True)
     with pytest.raises(ValueError, match="enter failed"):
         with koiled_cm(resource):
@@ -212,7 +219,7 @@ def test_koiled_cm_enter_failure_tears_down_koil():
     assert global_koil.get() is None
 
 
-def test_koiled_cm_exception_suppression_propagates():
+def test_koiled_cm_exception_suppression_propagates() -> None:
     resource = AsyncResource(suppress=True)
     with koiled_cm(resource):
         raise RuntimeError("suppressed by __aexit__")
@@ -220,7 +227,7 @@ def test_koiled_cm_exception_suppression_propagates():
     assert global_koil.get() is None
 
 
-def test_koiled_cm_explicit_koil_is_used():
+def test_koiled_cm_explicit_koil_is_used() -> None:
     resource = AsyncResource()
     my_koil = Koil(cancel_timeout=0.5)
     with koiled_cm(resource, koil=my_koil):

@@ -1,6 +1,7 @@
 """Tests that contextvars are correctly propagated into spawned threads."""
 
 import contextvars
+from collections.abc import AsyncGenerator, Generator
 
 from koil.bridge import (
     iterate_threaded,
@@ -21,10 +22,10 @@ request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 class SpawnModel(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "SpawnModel":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def read_var_in_thread(self) -> str:
@@ -45,29 +46,29 @@ class SpawnModel(KoiledModel):
 
 
 class GenModel(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "GenModel":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def yield_var_values(self, n: int):
+    async def yield_var_values(self, n: int) -> AsyncGenerator[str, None]:
         async for val in iterate_threaded(self._gen, n):
             yield val
 
-    def _gen(self, n: int):
+    def _gen(self, n: int) -> Generator[str, None, None]:
         for _ in range(n):
             yield request_id.get()
 
-    async def yield_accumulated(self, n: int):
+    async def yield_accumulated(self, n: int) -> AsyncGenerator[str, None]:
         async for val in iterate_threaded(self._accumulate_gen, n):
             yield val
 
-    async def yield_accumulated_bridged(self, n: int):
+    async def yield_accumulated_bridged(self, n: int) -> AsyncGenerator[str, None]:
         async for val in iterate_threaded_bridged(self._accumulate_gen, n):
             yield val
 
-    def _accumulate_gen(self, n: int):
+    def _accumulate_gen(self, n: int) -> Generator[str, None, None]:
         # Each step reads whatever the *previous* step left in the ContextVar
         # (without re-deriving it locally), so the yielded values reveal whether
         # mutations persisted across yields.
@@ -82,7 +83,7 @@ class GenModel(KoiledModel):
 # ---------------------------------------------------------------------------
 
 
-async def test_context_var_propagates_into_run_spawned():
+async def test_context_var_propagates_into_run_spawned() -> None:
     """A ContextVar set before run_threaded is visible inside the spawned thread."""
     token = request_id.set("req-123")
     try:
@@ -93,14 +94,14 @@ async def test_context_var_propagates_into_run_spawned():
         request_id.reset(token)
 
 
-async def test_context_var_default_visible_in_run_spawned():
+async def test_context_var_default_visible_in_run_spawned() -> None:
     """The default value of a ContextVar is visible inside the spawned thread."""
     async with SpawnModel() as m:
         result = await m.read_var_in_thread()
     assert result == "none"
 
 
-async def test_context_var_propagates_into_iterate_spawned():
+async def test_context_var_propagates_into_iterate_spawned() -> None:
     """A ContextVar set before iterate_threaded is visible for every yielded value."""
     token = request_id.set("req-456")
     try:
@@ -111,7 +112,7 @@ async def test_context_var_propagates_into_iterate_spawned():
         request_id.reset(token)
 
 
-async def test_context_var_isolation_between_calls():
+async def test_context_var_isolation_between_calls() -> None:
     """Different ContextVar values in consecutive calls don't bleed into each other."""
     async with SpawnModel() as m:
         t1 = request_id.set("first")
@@ -126,7 +127,7 @@ async def test_context_var_isolation_between_calls():
     assert r2 == "second"
 
 
-async def test_run_threaded_default_keeps_thread_isolation():
+async def test_run_threaded_default_keeps_thread_isolation() -> None:
     """run_threaded (default): a var set inside the thread does not leak to the caller."""
     assert request_id.get() == "none"
     async with SpawnModel() as m:
@@ -137,7 +138,7 @@ async def test_run_threaded_default_keeps_thread_isolation():
     assert request_id.get() == "none"
 
 
-async def test_run_threaded_bridged_propagates_var_back_out():
+async def test_run_threaded_bridged_propagates_var_back_out() -> None:
     """run_threaded_bridged: a var set inside the thread is visible to the caller."""
     assert request_id.get() == "none"
     async with SpawnModel() as m:
@@ -147,7 +148,7 @@ async def test_run_threaded_bridged_propagates_var_back_out():
     assert request_id.get() == "set-in-thread"
 
 
-async def test_iterate_threaded_default_isolates_each_step():
+async def test_iterate_threaded_default_isolates_each_step() -> None:
     """iterate_threaded (default): each step starts from the caller's value."""
     assert request_id.get() == "none"
     async with GenModel() as m:
@@ -158,7 +159,7 @@ async def test_iterate_threaded_default_isolates_each_step():
     assert request_id.get() == "none"
 
 
-async def test_iterate_threaded_bridged_propagates_var_back_out():
+async def test_iterate_threaded_bridged_propagates_var_back_out() -> None:
     """iterate_threaded_bridged: the generator's final var value is visible to the caller."""
     assert request_id.get() == "none"
     async with GenModel() as m:
@@ -166,7 +167,7 @@ async def test_iterate_threaded_bridged_propagates_var_back_out():
     assert request_id.get() == "0-1-2"
 
 
-async def test_iterate_threaded_bridged_persists_mutations_across_yields():
+async def test_iterate_threaded_bridged_persists_mutations_across_yields() -> None:
     """iterate_threaded_bridged: a var set in one step is observed by the next step."""
     async with GenModel() as m:
         results = [v async for v in m.yield_accumulated_bridged(3)]

@@ -125,7 +125,9 @@ def test_genuine_ambient_cancel_still_propagates() -> None:
     async def driver() -> None:
         task = asyncio.create_task(outer())
         # Wait until the worker is actually running before cancelling.
-        while not started.is_set():
+        # `started` is a threading.Event set by the worker thread, which an
+        # asyncio.Event could not be.
+        while not started.is_set():  # noqa: ASYNC110
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.05)
         task.cancel()

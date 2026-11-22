@@ -6,7 +6,16 @@ returns the object from its new home.
 
 import importlib
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # What the names below resolve to, for type checkers; at runtime
+    # __getattr__ imports them lazily and warns.
+    from koil.loop import Koil as Koil
+    from koil.loop import KoilProtocol as KoilProtocol
+    from koil.loop import _new_event_loop as _new_event_loop
+    from koil.loop import get_threaded_loop as get_threaded_loop
+    from koil.loop import run_threaded_event_loop as run_threaded_event_loop
 
 # name -> (target module, target name)
 _DEPRECATED: dict[str, tuple[str, str]] = {
@@ -20,7 +29,7 @@ _DEPRECATED: dict[str, tuple[str, str]] = {
 __all__ = [name for name in _DEPRECATED if not name.startswith("_")]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     try:
         module, target = _DEPRECATED[name]
     except KeyError:

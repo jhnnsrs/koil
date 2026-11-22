@@ -11,31 +11,31 @@ from koil.loop import Koil
 class Kant(KoiledModel):
     connected: bool = False
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "Kant":
         self.connected = True
         await asyncio.sleep(0.004)
         return self
 
-    async def __aexit__(self, *args, **kwargs):
+    async def __aexit__(self, *args: object, **kwargs: object) -> None:
         self.connected = False
 
 
 class Tan(KoiledModel):  #
     x: int = 3
 
-    async def arun(self):
+    async def arun(self) -> int:
         await asyncio.sleep(0.02)
         return self.x
 
-    def run(self):
+    def run(self) -> int:
         return unkoil(self.arun)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "Tan":
         await asyncio.sleep(0.002)
         self.x = 4
         return self
 
-    async def __aexit__(self, *args, **kwargs):
+    async def __aexit__(self, *args: object, **kwargs: object) -> None:
         pass
 
 
@@ -44,7 +44,7 @@ class App(Composition):
     tan: Tan = Field(default_factory=Tan)
 
 
-def test_composition_api_sync():
+def test_composition_api_sync() -> None:
     app = App()
 
     assert app.tan.x == 3, "tan.x should be 3"
@@ -55,7 +55,7 @@ def test_composition_api_sync():
     assert not app.kant.connected, "kant should be disconnected"
 
 
-async def test_composition_api_async():
+async def test_composition_api_async() -> None:
     app = App()
 
     assert app.tan.x == 3, "tan.x should be 3"
@@ -68,7 +68,7 @@ async def test_composition_api_async():
     assert not app.kant.connected, "kant should be disconnected"
 
 
-def test_multiple_contexts():
+def test_multiple_contexts() -> None:
 
     app = App()
 

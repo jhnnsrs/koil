@@ -293,7 +293,8 @@ def test_sleep_does_not_need_the_loop() -> None:
 
         nap = asyncio.ensure_future(run_threaded(work))
         await asyncio.sleep(0.02)
-        time.sleep(0.5)  # the loop is stuck well past the end of the nap
+        # The loop is stuck well past the end of the nap.
+        time.sleep(0.5)  # noqa: ASYNC251
         return await nap
 
     with Koil():

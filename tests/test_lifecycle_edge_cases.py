@@ -10,6 +10,8 @@ import sys
 import threading
 import time
 import warnings
+from collections.abc import Callable
+from types import TracebackType
 from typing import Any
 
 import pytest
@@ -42,7 +44,12 @@ class Resource:
         self.entered += 1
         return self
 
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
         self.exited += 1
         if self.fail_exit:
             raise RuntimeError("exit failed")
@@ -284,7 +291,9 @@ def test_a_nested_koil_shares_the_outer_loop_and_does_not_stop_it() -> None:
         assert unkoil(one) == 1
 
 
-def test_one_slow_worker_does_not_look_like_a_wedged_loop(caplog, monkeypatch) -> None:
+def test_one_slow_worker_does_not_look_like_a_wedged_loop(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A worker gets ``cancel_timeout`` to stop; the exit waits a bit longer than that."""
     # The loop needs cancel_timeout (0.3s) to give up on the worker. With no
     # margin at all the exit's own wait would end at that same moment and warn
@@ -387,9 +396,12 @@ async def test_a_cancelled_waiter_unregisters_itself() -> None:
 # -- threads started inside a koil context ----------------------------------------
 
 
-def in_thread(target: Any) -> list[Any]:
+def in_thread(
+    target: Callable[[], object],
+) -> tuple[object, list[warnings.WarningMessage]]:
     """Run *target* in a plain thread; what it returned, raised, and warned."""
-    outcome: list[Any] = []
+    outcome: list[object] = []
+    runtime_warnings: list[warnings.WarningMessage] = []
 
     def body() -> None:
         with warnings.catch_warnings(record=True) as caught:
@@ -398,7 +410,7 @@ def in_thread(target: Any) -> list[Any]:
                 outcome.append(target())
             except BaseException as e:
                 outcome.append(e)
-            outcome.append([w for w in caught if w.category is RuntimeWarning])
+            runtime_warnings.extend(w for w in caught if w.category is RuntimeWarning)
 
     # An empty context is what a thread starts with by default; free-threaded
     # builds inherit the starter's instead, so ask for it where that is possible.
@@ -408,7 +420,8 @@ def in_thread(target: Any) -> list[Any]:
     thread = threading.Thread(target=body, name="plain-thread", **fresh)
     thread.start()
     thread.join(10)
-    return outcome
+    (result,) = outcome
+    return result, runtime_warnings
 
 
 def test_a_client_entered_in_a_plain_thread_warns_about_the_lost_context() -> None:
@@ -459,7 +472,7 @@ def test_a_thread_started_with_the_context_is_fine() -> None:
         with Client() as client:
             return client.get(), global_koil.get() is outer
 
-    outcome: list[Any] = []
+    outcome: list[object] = []
 
     def body() -> None:
         with warnings.catch_warnings(record=True) as caught:

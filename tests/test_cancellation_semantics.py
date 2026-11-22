@@ -13,6 +13,8 @@ import contextvars
 import os
 import threading
 import time
+from collections.abc import Callable
+from typing import TypeVar
 
 import pytest
 
@@ -34,8 +36,10 @@ from koil import (
 )
 from koil.context import current_cancel_event, global_koil, global_koil_loop
 
+_T = TypeVar("_T")
 
-async def _in_thread(fn):
+
+async def _in_thread(fn: Callable[[], _T]) -> _T:
     return await asyncio.get_running_loop().run_in_executor(None, fn)
 
 
@@ -100,7 +104,7 @@ def test_an_error_raised_while_unwinding_is_what_the_caller_gets() -> None:
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
-            raise ValueError("cleanup went wrong")
+            raise ValueError("cleanup went wrong") from None
 
     with Koil():
         future = unkoil_task(work)
@@ -307,12 +311,14 @@ def test_calling_into_a_stopped_loop_raises_instead_of_hanging() -> None:
         stale.run(unkoil, asyncio.sleep, 0)
 
 
-def test_a_wedged_loop_cannot_hold_a_call_with_a_timeout(monkeypatch) -> None:
+def test_a_wedged_loop_cannot_hold_a_call_with_a_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The deadline is a timer on the loop; a loop that blocks never fires it."""
     monkeypatch.setattr(koil.utils, "TIMEOUT_BACKSTOP_MARGIN", 0.2)
 
     async def block_the_loop() -> None:
-        time.sleep(1.5)
+        time.sleep(1.5)  # noqa: ASYNC251 - wedging the loop is the point
 
     with Koil(cancel_timeout=0.2, shutdown_join_timeout=0.1):
         unkoil_task(block_the_loop)

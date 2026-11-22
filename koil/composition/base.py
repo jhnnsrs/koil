@@ -1,6 +1,6 @@
 import logging
 from types import TracebackType
-from typing import Any, Self, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -8,6 +8,8 @@ from koil.decorators import koilable
 from koil.loop import Koil
 
 T = TypeVar("T")
+_KoiledModelT = TypeVar("_KoiledModelT", bound="KoiledModel")
+_CompositionT = TypeVar("_CompositionT", bound="Composition")
 
 logger = logging.getLogger(__name__)
 
@@ -20,15 +22,15 @@ _KOIL_STATE = ("__koil", "__koil_owned")
 class KoiledModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    def __enter__(self: Self) -> Self: ...
+    def __enter__(self: _KoiledModelT) -> _KoiledModelT: ...
 
-    def enter(self: Self) -> Self: ...
+    def enter(self: _KoiledModelT) -> _KoiledModelT: ...
 
-    async def aenter(self: Self) -> Self: ...
+    async def aenter(self: _KoiledModelT) -> _KoiledModelT: ...
 
-    def exit(self: Self) -> None: ...
+    def exit(self) -> None: ...
 
-    async def aexit(self: Self) -> None: ...
+    async def aexit(self) -> None: ...
 
     def __exit__(
         self,
@@ -37,7 +39,7 @@ class KoiledModel(BaseModel):
         exc_tb: TracebackType | None,
     ) -> None: ...
 
-    async def __aenter__(self: Self) -> Self:
+    async def __aenter__(self: _KoiledModelT) -> _KoiledModelT:
         return self
 
     async def __aexit__(
@@ -47,7 +49,7 @@ class KoiledModel(BaseModel):
         exc_tb: TracebackType | None,
     ) -> None: ...
 
-    def __copy__(self: Self) -> Self:
+    def __copy__(self: _KoiledModelT) -> _KoiledModelT:
         # A copy is a new, not-yet-entered object: it starts its own Koil
         # rather than sharing (and later stopping) the original's loop.
         copied = super().__copy__()
@@ -55,7 +57,9 @@ class KoiledModel(BaseModel):
             copied.__dict__.pop(key, None)
         return copied
 
-    def __deepcopy__(self: Self, memo: dict[int, Any] | None = None) -> Self:
+    def __deepcopy__(
+        self: _KoiledModelT, memo: dict[int, Any] | None = None
+    ) -> _KoiledModelT:
         # The Koil holds a thread and a loop, neither of which can be deep
         # copied; step around it and leave the copy without one.
         state = {
@@ -93,7 +97,7 @@ class Composition(KoiledModel):
             if not isinstance(value, Koil)  # that was entered before
         ]
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self: _CompositionT) -> _CompositionT:
         await super().__aenter__()
         entered: list[Any] = []
         try:

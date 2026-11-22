@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -28,7 +29,7 @@ async def _fast(result: int = 42) -> int:
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_with_timeout_expires():
+def test_unkoil_with_timeout_expires() -> None:
     with Koil():
         start = time.monotonic()
         with pytest.raises(KoilTimeoutError):
@@ -38,7 +39,7 @@ def test_unkoil_with_timeout_expires():
 
 
 @pytest.mark.timeout(10)
-def test_timeout_error_is_caught_by_builtin_timeout_and_koil_error():
+def test_timeout_error_is_caught_by_builtin_timeout_and_koil_error() -> None:
     with Koil():
         with pytest.raises(TimeoutError):
             unkoil_with_timeout(_slow, 0.05)
@@ -47,24 +48,24 @@ def test_timeout_error_is_caught_by_builtin_timeout_and_koil_error():
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_with_timeout_fast_task_returns():
+def test_unkoil_with_timeout_fast_task_returns() -> None:
     with Koil():
         assert unkoil_with_timeout(_fast, 5.0, 21) == 21
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_with_timeout_negative_raises_value_error():
+def test_unkoil_with_timeout_negative_raises_value_error() -> None:
     with Koil():
         with pytest.raises(ValueError):
             unkoil_with_timeout(_fast, -1.0)
 
 
 @pytest.mark.timeout(10)
-def test_timeout_cancels_underlying_task():
+def test_timeout_cancels_underlying_task() -> None:
     """On expiry the coroutine is actually cancelled, not orphaned."""
     cancelled = []
 
-    async def tracks_cancel():
+    async def tracks_cancel() -> None:
         try:
             await asyncio.sleep(5)
         except asyncio.CancelledError:
@@ -80,11 +81,11 @@ def test_timeout_cancels_underlying_task():
 
 
 @pytest.mark.timeout(10)
-def test_timeout_unacknowledged_cancel_reports_it():
+def test_timeout_unacknowledged_cancel_reports_it() -> None:
     """A coroutine that swallows its first cancel past the grace period still
     raises KoilTimeoutError, with the 'did not acknowledge' wording."""
 
-    async def stubborn():
+    async def stubborn() -> None:
         try:
             await asyncio.sleep(5)
         except asyncio.CancelledError:
@@ -99,7 +100,7 @@ def test_timeout_unacknowledged_cancel_reports_it():
 
 
 @pytest.mark.timeout(10)
-def test_user_function_with_own_timeout_param_does_not_collide():
+def test_user_function_with_own_timeout_param_does_not_collide() -> None:
     async def fn_with_timeout(timeout: float) -> float:
         await asyncio.sleep(0)
         return timeout
@@ -109,7 +110,7 @@ def test_user_function_with_own_timeout_param_does_not_collide():
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_task_with_timeout_expires_without_result_call():
+def test_unkoil_task_with_timeout_expires_without_result_call() -> None:
     """The deadline is enforced on the loop even before result() is called."""
     with Koil():
         future = unkoil_task_with_timeout(_slow, 0.05)
@@ -120,7 +121,7 @@ def test_unkoil_task_with_timeout_expires_without_result_call():
 
 
 @pytest.mark.timeout(10)
-def test_result_timeout_expires():
+def test_result_timeout_expires() -> None:
     with Koil():
         future = unkoil_task(_slow)
         with pytest.raises(KoilTimeoutError):
@@ -128,7 +129,7 @@ def test_result_timeout_expires():
 
 
 @pytest.mark.timeout(10)
-def test_result_timeout_zero_on_done_future_returns():
+def test_result_timeout_zero_on_done_future_returns() -> None:
     with Koil():
         future = unkoil_task(_fast, 7)
         while not future.done():
@@ -137,7 +138,7 @@ def test_result_timeout_zero_on_done_future_returns():
 
 
 @pytest.mark.timeout(10)
-def test_result_negative_timeout_raises_value_error():
+def test_result_negative_timeout_raises_value_error() -> None:
     with Koil():
         future = unkoil_task(_fast)
         with pytest.raises(ValueError):
@@ -146,7 +147,7 @@ def test_result_negative_timeout_raises_value_error():
 
 
 @pytest.mark.timeout(10)
-def test_result_external_cancel_raises_cancelled_not_timeout():
+def test_result_external_cancel_raises_cancelled_not_timeout() -> None:
     import concurrent.futures
 
     with Koil():
@@ -159,11 +160,11 @@ def test_result_external_cancel_raises_cancelled_not_timeout():
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_gen_with_timeout_per_step():
+def test_unkoil_gen_with_timeout_per_step() -> None:
     """The bound is per step: a generator that keeps yielding within the bound
     runs to completion even if its total runtime exceeds the timeout."""
 
-    async def steady():
+    async def steady() -> AsyncGenerator[int, None]:
         for i in range(5):
             await asyncio.sleep(0.05)
             yield i
@@ -173,10 +174,10 @@ def test_unkoil_gen_with_timeout_per_step():
 
 
 @pytest.mark.timeout(10)
-def test_unkoil_gen_with_timeout_slow_step_raises_and_finalizes():
+def test_unkoil_gen_with_timeout_slow_step_raises_and_finalizes() -> None:
     finalized = []
 
-    async def stalls():
+    async def stalls() -> AsyncGenerator[int, None]:
         try:
             yield 1
             await asyncio.sleep(5)
@@ -193,7 +194,7 @@ def test_unkoil_gen_with_timeout_slow_step_raises_and_finalizes():
 
 
 @pytest.mark.timeout(10)
-def test_plain_unkoil_unaffected():
+def test_plain_unkoil_unaffected() -> None:
     """No-timeout paths behave exactly as before."""
     with Koil():
         assert unkoil(_fast, 3) == 3

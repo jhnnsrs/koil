@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncGenerator
 
 from koil import Koil
 from koil.bridge import unkoil, unkoil_gen
@@ -11,7 +12,7 @@ async def sleep(ins: int) -> int:
     return ins
 
 
-async def iterating():
+async def iterating() -> AsyncGenerator[int, None]:
     yield 1
     await asyncio.sleep(0.001)
     yield 2
@@ -19,34 +20,34 @@ async def iterating():
     yield 3
 
 
-def test_sync_context():
+def test_sync_context() -> None:
     with AsyncContextManager() as c:
         assert unkoil(c.aprint) == "sss", (
             "Koil realized its async and was okay with that"
         )
 
 
-async def test_async_context():
+async def test_async_context() -> None:
     async with AsyncContextManager() as c:
         print(await c.aprint())
 
 
-def test_sync():
+def test_sync() -> None:
     with Koil():
         assert unkoil(sleep, 1) == 1, "Koil realized its async and was okay with that"
 
 
-async def test_async():
+async def test_async() -> None:
     async with Koil():
         assert await sleep(1) == 1, "Koil realized its async and was okay with that"
 
 
-async def test_async_sync():
+async def test_async_sync() -> None:
     with Koil():
         assert unkoil(sleep, 1) == 1, "Koil realized its async and was okay with that"
 
 
-def test_iterating():
+def test_iterating() -> None:
     with Koil():
         x = unkoil_gen(iterating)
         assert next(x) == 1
@@ -58,4 +59,4 @@ def test_iterating():
         except StopIteration:
             pass
         else:
-            assert False, "Should have raised StopIteration"
+            raise AssertionError("Should have raised StopIteration")

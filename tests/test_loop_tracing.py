@@ -8,24 +8,25 @@ them directly rather than driving a real debugger.
 """
 
 import asyncio
+import threading
 
 import pytest
 
 from koil.loop import get_threaded_loop
 
 
-def _make_loop():
+def _make_loop() -> tuple[asyncio.AbstractEventLoop, threading.Thread]:
     """Create a threaded loop and return ``(loop, thread)``; caller must stop it."""
     return get_threaded_loop(name="TracingTestLoop", uvify=False)
 
 
-def _stop(loop: asyncio.AbstractEventLoop, thread) -> None:
+def _stop(loop: asyncio.AbstractEventLoop, thread: threading.Thread) -> None:
     """Stop the loop and join its thread so the loop is closed before returning."""
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5.0)
 
 
-def test_loop_thread_is_traced_by_default(monkeypatch):
+def test_loop_thread_is_traced_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("KOIL_DO_TRACE", raising=False)
     loop, thread = _make_loop()
     try:
@@ -36,7 +37,9 @@ def test_loop_thread_is_traced_by_default(monkeypatch):
 
 
 @pytest.mark.parametrize("value", ["0", "false", "No", "OFF", " off "])
-def test_falsy_koil_do_trace_hides_loop_thread(monkeypatch, value):
+def test_falsy_koil_do_trace_hides_loop_thread(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
     monkeypatch.setenv("KOIL_DO_TRACE", value)
     loop, thread = _make_loop()
     try:
@@ -47,7 +50,9 @@ def test_falsy_koil_do_trace_hides_loop_thread(monkeypatch, value):
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes"])
-def test_truthy_koil_do_trace_keeps_loop_thread_traced(monkeypatch, value):
+def test_truthy_koil_do_trace_keeps_loop_thread_traced(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
     monkeypatch.setenv("KOIL_DO_TRACE", value)
     loop, thread = _make_loop()
     try:

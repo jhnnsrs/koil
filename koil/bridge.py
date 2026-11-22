@@ -71,7 +71,7 @@ SendType = TypeVar("SendType")
 KOIL_CANCEL_TIMEOUT = 10.0
 
 
-def _reject_awaitable_object(value: Any, func_name: str) -> None:
+def _reject_awaitable_object(value: object, func_name: str) -> None:
     """Raise a pointed TypeError when *value* is an already-created coroutine
     or async-generator object instead of the async function itself.
 
@@ -782,7 +782,7 @@ async def _iterate_threaded(
     """
     generator: Generator[R, S, None] | None = None
 
-    def step(send_value: Any) -> R:
+    def step(send_value: S) -> R:
         __tracebackhide__ = True
         # Create the generator lazily on the first step so any work done while
         # building it happens in the thread, not on the loop.
@@ -794,7 +794,7 @@ async def _iterate_threaded(
         except StopIteration:
             # StopIteration interacts badly with futures, so wrap it and let
             # the async side recognise the end of iteration.
-            raise KoilStopIteration("Generator exhausted")
+            raise KoilStopIteration("Generator exhausted") from None
 
     async def close(report: bool) -> None:
         # The generator is suspended at a yield (or was never resumed after a

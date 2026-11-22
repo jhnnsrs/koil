@@ -12,7 +12,6 @@ from typing import (
     Generic,
     ParamSpec,
     Protocol,
-    Self,
     TypeVar,
     overload,
 )
@@ -31,9 +30,12 @@ from koil.context import (
 )
 from koil.loop import Koil, KoilProtocol
 
+_KoilableT = TypeVar("_KoilableT", bound="Koilable")
+_SyncKoilableT = TypeVar("_SyncKoilableT", bound="SyncKoilable")
+
 
 class Koilable(Protocol):
-    async def __aenter__(self) -> Self: ...
+    async def __aenter__(self: _KoilableT) -> _KoilableT: ...
 
     async def __aexit__(
         self,
@@ -44,7 +46,7 @@ class Koilable(Protocol):
 
 
 class SyncKoilable(Protocol):
-    def __enter__(self) -> Self: ...
+    def __enter__(self: _SyncKoilableT) -> _SyncKoilableT: ...
 
     def __exit__(
         self,
@@ -145,8 +147,6 @@ def koilable(
             raise TypeError(
                 f"{cls.__name__}.__aexit__ must be a coroutine function (async def)"
             )
-        cls.__koilable__ = True
-
         # Whether each (possibly nested) enter of an instance started the Koil
         # it runs on. Only that enter's exit may stop the loop again: an inner
         # `with obj:` on an object that already owns its loop must leave it
@@ -160,7 +160,7 @@ def koilable(
                 setattr(self, owned_field, stack)
             stack.append(owned)
 
-        def koiled_enter(self: Koilable):
+        def koiled_enter(self: Koilable) -> Koilable:
             __tracebackhide__ = True
             if ambient_koil() is not None:
                 # We are in a koiled loop no need to koil again
@@ -190,7 +190,7 @@ def koilable(
             exc_type: type[BaseException] | None,
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
-        ):
+        ) -> bool | None:
             __tracebackhide__ = True
             stack = getattr(self, owned_field, None)
             # No record (entered some other way): fall back to exiting the
@@ -211,22 +211,27 @@ def koilable(
                     if koil is not None:
                         koil.__exit__(None, None, None)
 
-        def koiled_param_exit(self: Koilable):
+        def koiled_param_exit(self: Koilable) -> bool | None:
             return koiled_exit(self, None, None, None)
 
-        async def aexit(self: Koilable):
+        async def aexit(self: Koilable) -> bool | None:
             return await self.__aexit__(None, None, None)
 
-        async def aenter(self: Koilable):
+        async def aenter(self: Koilable) -> Koilable:
             return await self.__aenter__()
 
-        cls.__enter__ = koiled_enter
-        cls.__exit__ = koiled_exit
+        # Grafted onto a class whose type does not declare them, hence setattr.
+        grafted: dict[str, object] = {
+            "__koilable__": True,
+            "__enter__": koiled_enter,
+            "__exit__": koiled_exit,
+        }
         if add_connectors:
-            cls.aexit = aexit
-            cls.aenter = aenter
-            cls.exit = koiled_param_exit
-            cls.enter = koiled_enter
+            grafted.update(
+                aexit=aexit, aenter=aenter, exit=koiled_param_exit, enter=koiled_enter
+            )
+        for name, value in grafted.items():
+            setattr(cls, name, value)
 
         return cls
 
@@ -320,7 +325,7 @@ def koiled(
         if inspect.isasyncgenfunction(fn):
 
             @functools.wraps(fn)
-            def gen_wrapper(*args: Any, **kwargs: Any) -> Any:
+            def gen_wrapper(*args: Any, **kwargs: Any) -> object:
                 __tracebackhide__ = True
                 if _in_async_context():
                     return fn(*args, **kwargs)
@@ -338,7 +343,7 @@ def koiled(
             )
 
         @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> object:
             __tracebackhide__ = True
             if _in_async_context():
                 return fn(*args, **kwargs)

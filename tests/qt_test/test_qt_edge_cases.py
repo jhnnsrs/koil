@@ -13,6 +13,8 @@ import pytest
 # Skip the entire module unless a Qt binding is installed.
 pytest.importorskip("PyQt5")
 
+from PyQt5.QtWidgets import QApplication
+
 from koil import CancelledError, Koil, KoilError, unkoil  # noqa: E402
 from koil.qt import (  # noqa: E402
     QtFuture,
@@ -144,7 +146,9 @@ def test_blocking_the_qt_thread_on_a_call_that_needs_it_raises_instead_of_hangin
             unkoil(needs_the_qt_thread)
 
 
-def test_another_thread_may_block_on_a_call_that_needs_the_qt_thread(qapp) -> None:
+def test_another_thread_may_block_on_a_call_that_needs_the_qt_thread(
+    qapp: QApplication,
+) -> None:
     """Only the thread the slot runs on is the problem."""
     wrapped = qt_to_async(lambda future: future.resolve(1))
     refused: list[BaseException] = []
@@ -171,7 +175,9 @@ def test_another_thread_may_block_on_a_call_that_needs_the_qt_thread(qapp) -> No
     assert len(refused) == 1 and isinstance(refused[0], TimeoutError)
 
 
-def test_a_task_spawned_by_the_blocking_call_is_not_refused(qapp) -> None:
+def test_a_task_spawned_by_the_blocking_call_is_not_refused(
+    qapp: QApplication,
+) -> None:
     """Nobody is blocked on a background task, even one started under ``unkoil``."""
     wrapped = qt_to_async(lambda future: future.resolve(1))
     outcome: list[object] = []

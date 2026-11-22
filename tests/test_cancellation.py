@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 
@@ -12,16 +13,16 @@ from koil.loop import Koil
 
 
 class CoopWorker(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "CoopWorker":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def run_blocking(self):
+    async def run_blocking(self) -> str:
         return await run_threaded(self._work)
 
-    def _work(self):
+    def _work(self) -> str:
         for _ in range(100):
             time.sleep(0.005)
             check_cancelled()
@@ -29,17 +30,17 @@ class CoopWorker(KoiledModel):
 
 
 class GenWorker(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "GenWorker":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def stream(self):
+    async def stream(self) -> AsyncGenerator[int, None]:
         async for val in iterate_threaded(self._gen):
             yield val
 
-    def _gen(self):
+    def _gen(self) -> Generator[int, None, None]:
         for i in range(100):
             time.sleep(0.005)
             check_cancelled()
@@ -47,16 +48,16 @@ class GenWorker(KoiledModel):
 
 
 class SleepWorker(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "SleepWorker":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
-    async def do_sleep(self):
+    async def do_sleep(self) -> None:
         return await run_threaded(self._set_cancel_then_sleep)
 
-    def _set_cancel_then_sleep(self):
+    def _set_cancel_then_sleep(self) -> None:
         # Simulate an external cancellation signal arriving mid-sleep
         event = current_cancel_event.get()
         event.set()
@@ -64,7 +65,7 @@ class SleepWorker(KoiledModel):
 
 
 @pytest.mark.timeout(10)
-async def test_run_spawned_cooperative_cancel():
+async def test_run_spawned_cooperative_cancel() -> None:
     """Cancelling a task wrapping run_threaded completes cleanly when the thread checks check_cancelled."""
     async with CoopWorker() as w:
         task = asyncio.create_task(w.run_blocking())
@@ -75,10 +76,10 @@ async def test_run_spawned_cooperative_cancel():
 
 
 @pytest.mark.timeout(10)
-async def test_iterate_spawned_cooperative_cancel():
+async def test_iterate_spawned_cooperative_cancel() -> None:
     """Cancelling a task wrapping iterate_threaded completes cleanly when the generator checks check_cancelled."""
 
-    async def consume(w: GenWorker):
+    async def consume(w: GenWorker) -> None:
         async for _ in w.stream():
             pass
 
@@ -91,7 +92,7 @@ async def test_iterate_spawned_cooperative_cancel():
 
 
 @pytest.mark.timeout(10)
-async def test_sleep_raises_thread_cancelled_error_on_cancel():
+async def test_sleep_raises_thread_cancelled_error_on_cancel() -> None:
     """koil.bridge.sleep raises ThreadCancelledError when the thread's cancel event is already set."""
     async with SleepWorker() as w:
         with pytest.raises(ThreadCancelledError):
@@ -99,7 +100,7 @@ async def test_sleep_raises_thread_cancelled_error_on_cancel():
 
 
 @pytest.mark.timeout(10)
-async def test_run_spawned_cancel_timeout():
+async def test_run_spawned_cancel_timeout() -> None:
     """A non-cooperative thread causes KoilError after cancel_timeout expires."""
     blocker = threading.Event()
 
@@ -122,7 +123,7 @@ async def test_run_spawned_cancel_timeout():
 
 
 @pytest.mark.timeout(10)
-async def test_cancel_timeout_constructor_kwarg():
+async def test_cancel_timeout_constructor_kwarg() -> None:
     """cancel_timeout can be set via the Koil constructor, not only as an attribute."""
     blocker = threading.Event()
 
@@ -143,10 +144,10 @@ async def test_cancel_timeout_constructor_kwarg():
 
 
 class IdleLoopSleeper(KoiledModel):
-    async def __aenter__(self):
+    async def __aenter__(self) -> "IdleLoopSleeper":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def nap(self) -> float:
@@ -160,7 +161,7 @@ class IdleLoopSleeper(KoiledModel):
 
 
 @pytest.mark.timeout(10)
-async def test_sleep_returns_on_time_while_the_loop_is_idle():
+async def test_sleep_returns_on_time_while_the_loop_is_idle() -> None:
     """A worker's sleep is timed by the loop, and the loop has to be woken for it.
 
     Nothing else happens on the loop here: it only awaits the worker. A timer added

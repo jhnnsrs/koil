@@ -40,7 +40,7 @@ Reference = str
 T = TypeVar("T")
 
 
-def _set_future_result(fut: "asyncio.Future[Any]", result: Any) -> None:
+def _set_future_result(fut: "asyncio.Future[T]", result: T) -> None:
     """Set a future's result, guarding against an already-resolved future.
 
     Must be scheduled onto the future's loop (via call_soon_threadsafe) so that
@@ -76,7 +76,7 @@ def _context_if_own(target: object) -> contextvars.Context | None:
     return None
 
 
-def _refuse_deadlock(thread_ident: int, slot: Any) -> None:
+def _refuse_deadlock(thread_ident: int, slot: object) -> None:
     """Raise if the Qt thread is blocked waiting for the very task calling it.
 
     ``unkoil()`` on the Qt thread blocks that thread until the coroutine
@@ -145,7 +145,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
     def __init__(
         self,
         parent: QtCore.QObject | None = None,
-    ):
+    ) -> None:
         super().__init__(parent=parent)
         self.id = uuid.uuid4().hex
         self.loop = _current_loop()
@@ -156,20 +156,20 @@ class QtFuture(QtCore.QObject, Generic[T]):
         self.resolved = False
         self.rejected = False
 
-    def set_cancelled(self):
+    def set_cancelled(self) -> None:
         """WIll be called by the asyncio loop"""
         self.iscancelled = True
         self.cancelled.emit(CancelledError("The awaiting task was cancelled"))
 
     @property
-    def done(self):
+    def done(self) -> bool:
         return self.resolved or self.rejected or self.iscancelled
 
     @property
-    def is_cancelled(self):
+    def is_cancelled(self) -> bool:
         return self.aiofuture.cancelled()
 
-    def resolve(self, returns: T):
+    def resolve(self, returns: T) -> None:
         ctx = _context_if_own(self)
         self.resolved = True
         # The done-check is performed on the loop thread inside the callback so
@@ -179,7 +179,7 @@ class QtFuture(QtCore.QObject, Generic[T]):
         # from the Qt side is dropped rather than raised into its slot.
         _call_threadsafe(self.loop, _set_future_result, self.aiofuture, (ctx, returns))
 
-    def reject(self, exp: Exception):
+    def reject(self, exp: Exception) -> None:
         self.rejected = True
         _call_threadsafe(self.loop, _set_future_exception, self.aiofuture, exp)
 
@@ -204,7 +204,7 @@ class QtGenerator(QtCore.QObject, Generic[T]):
 
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.id = uuid.uuid4().hex
         self.loop = _current_loop()
@@ -215,21 +215,21 @@ class QtGenerator(QtCore.QObject, Generic[T]):
         ] = asyncio.Queue()
         self.iscancelled = False
 
-    def set_cancelled(self):
+    def set_cancelled(self) -> None:
         """WIll be called by the asyncio loop"""
         self.iscancelled = True
 
-    def next(self, args: T):
+    def next(self, args: T) -> None:
         """Yield a value. Called from the Qt loop."""
         context = _context_if_own(self)
 
         _call_threadsafe(self.loop, self.queue.put_nowait, (context, args, None))
 
-    def throw(self, exception: BaseException):
+    def throw(self, exception: BaseException) -> None:
         """End the generator with an exception. Called from the Qt loop."""
         _call_threadsafe(self.loop, self.queue.put_nowait, (None, None, exception))
 
-    def stop(self):
+    def stop(self) -> None:
         """End the generator: what was yielded before is still delivered."""
         self.throw(QtStopIteration())
 
@@ -256,7 +256,7 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
         coro: Callable[Concatenate[QtFuture[T], P], None],
         timeout: float | None = None,
         parent: QtCore.QObject | None = None,
-    ):
+    ) -> None:
         super().__init__(parent)
         assert not inspect.iscoroutinefunction(coro), (
             "This should not be a coroutine, but a normal qt slot"
@@ -267,16 +267,22 @@ class qt_to_async(QtCore.QObject, Generic[T, P]):
         self._thread_ident = threading.get_ident()
         self._called.connect(self.on_called)
 
-    def _invoke(self, qtfuture: QtFuture[T], args: Any, kwargs: Any) -> None:
+    def _invoke(
+        self,
+        qtfuture: QtFuture[T],
+        args: tuple[object, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         current_callback.set(qtfuture)
-        self.coro(qtfuture, *args, **kwargs)
+        # The arguments crossed a Qt signal, which does not carry their ParamSpec.
+        self.coro(qtfuture, *args, **kwargs)  # pyright: ignore[reportCallIssue]
 
     def on_called(
         self,
         typed_tuple: tuple[
             QtFuture[T], tuple[object, ...], dict[str, Any], contextvars.Context
         ],
-    ):
+    ) -> None:
         qtfuture, args, kwargs, ctx = typed_tuple
 
         try:
@@ -337,7 +343,7 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         coro: Callable[Concatenate[QtGenerator[T], P], None],
         timeout: float | None = None,
         parent: QtCore.QObject | None = None,
-    ):
+    ) -> None:
         super().__init__(parent)
         assert not inspect.iscoroutinefunction(coro), (
             "This should not be a coroutine, but a normal qt slot"
@@ -347,16 +353,22 @@ class qt_gen_to_async_gen(QtCore.QObject, Generic[T, P]):
         self._thread_ident = threading.get_ident()
         self._called.connect(self.on_called)
 
-    def _invoke(self, qtgenerator: QtGenerator[T], args: Any, kwargs: Any) -> None:
+    def _invoke(
+        self,
+        qtgenerator: QtGenerator[T],
+        args: tuple[object, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
         current_callback.set(qtgenerator)
-        self.coro(qtgenerator, *args, **kwargs)
+        # The arguments crossed a Qt signal, which does not carry their ParamSpec.
+        self.coro(qtgenerator, *args, **kwargs)  # pyright: ignore[reportCallIssue]
 
     def on_called(
         self,
         typed_tuple: tuple[
             QtGenerator[T], tuple[object, ...], dict[str, Any], contextvars.Context
         ],
-    ):
+    ) -> None:
         qtgenerator, args, kwargs, ctx = typed_tuple
 
         try:
@@ -417,7 +429,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
         function: Callable[P, Awaitable[T]],
         timeout: float | None = None,
         parent: QtCore.QObject | None = None,
-    ):
+    ) -> None:
         """
         Args:
             function: The async function to wrap.
@@ -433,7 +445,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
         self.timeout = timeout
         self._returnedwithoutcontext.connect(self.on_returnedwithoutcontext)
 
-    def on_returnedwithoutcontext(self, answer: tuple[T, contextvars.Context]):
+    def on_returnedwithoutcontext(self, answer: tuple[T, contextvars.Context]) -> None:
         res, ctxs = answer
 
         # The coroutine's context is made visible to whoever handles `returned`,
@@ -460,7 +472,7 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
             **kwargs,
         )
 
-    def __call__(self, *args: Any, **kwds: Any) -> Any:
+    def __call__(self, *args: P.args, **kwds: P.kwargs) -> KoilFuture[T]:
         return self.run(*args, **kwds)
 
 
@@ -482,7 +494,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
         unique: bool = False,
         timeout: float | None = None,
         parent: QtCore.QObject | None = None,
-    ):
+    ) -> None:
         """
         Args:
             function: The async generator function to wrap.
@@ -500,7 +512,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
         self.timeout = timeout
         self._yieldedwithoutcontext.connect(self.on_yieldedwithoutcontext)
 
-    def on_yieldedwithoutcontext(self, answer: tuple[T, contextvars.Context]):
+    def on_yieldedwithoutcontext(self, answer: tuple[T, contextvars.Context]) -> None:
         res, ctxs = answer
 
         # Scoped to the emit -- see `async_to_qt.on_returnedwithoutcontext`.
@@ -527,7 +539,7 @@ class async_gen_to_qt(QtCore.QObject, Generic[T, P]):
 
 
 class WrappedObject(QtCore.QObject):
-    def __init__(self, koil: Koil, parent: QtCore.QObject | None = None):
+    def __init__(self, koil: Koil, parent: QtCore.QObject | None = None) -> None:
         super().__init__(parent=parent)
         self.koil = koil
         self._parent = self.parent()
@@ -542,7 +554,7 @@ class WrappedObject(QtCore.QObject):
             self.koil.__exit__(None, None, None)
         self._hooked_close_event(event)  # type: ignore
 
-    def destroyedEvent(self):
+    def destroyedEvent(self) -> None:
         if hasattr(self, "koil"):
             if self.koil.running:
                 self.koil.__exit__(None, None, None)
@@ -557,7 +569,7 @@ class QtKoil(Koil):
         shutdown_join_timeout: float | None = None,
         rewrite_tracebacks: bool = True,
         cancel_timeout: float = 2.0,
-    ):
+    ) -> None:
         super().__init__(
             sync_in_async=sync_in_async,
             uvify=uvify,
@@ -568,7 +580,7 @@ class QtKoil(Koil):
         self.parent = parent
         self._qobject = None
 
-    def __enter__(self):
+    def __enter__(self) -> "QtKoil":
         super().__enter__()
         assert self.parent, "Parent must be set before entering the loop"
         self._qobject = WrappedObject(parent=self.parent, koil=self)
@@ -590,7 +602,7 @@ class QtKoilMixin(QtWidgets.QWidget):
 
     """
 
-    def __init__(self, *args, **kwargs):  # type: ignore
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # type: ignore
         super().__init__(*args, **kwargs)  # type: ignore
         self._koil = create_qt_koil(parent=self, auto_enter=False)
 

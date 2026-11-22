@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -13,12 +14,12 @@ from koil.loop import Koil
 # ---------------------------------------------------------------------------
 
 
-async def test_thread_safe_event_set_from_background_thread():
+async def test_thread_safe_event_set_from_background_thread() -> None:
     """KoilThreadSafeEvent.set() called from a non-event-loop thread wakes an async waiter."""
     loop = asyncio.get_running_loop()
     event = KoilThreadSafeEvent(loop)
 
-    def setter():
+    def setter() -> None:
         import time
 
         time.sleep(0.01)
@@ -32,7 +33,7 @@ async def test_thread_safe_event_set_from_background_thread():
     t.join()
 
 
-async def test_thread_safe_event_clear_from_background_thread():
+async def test_thread_safe_event_clear_from_background_thread() -> None:
     """KoilThreadSafeEvent.clear() called from a non-event-loop thread clears the event."""
     loop = asyncio.get_running_loop()
     event = KoilThreadSafeEvent(loop)
@@ -40,7 +41,7 @@ async def test_thread_safe_event_clear_from_background_thread():
     # Use a regular asyncio.Event as a signal that the clear has been scheduled.
     cleared_signal = asyncio.Event()
 
-    def clearer():
+    def clearer() -> None:
         import time
 
         time.sleep(0.01)
@@ -64,13 +65,13 @@ async def test_thread_safe_event_clear_from_background_thread():
 # ---------------------------------------------------------------------------
 
 
-async def _simple_gen():
+async def _simple_gen() -> AsyncGenerator[int, None]:
     yield 10
     yield 20
     yield 30
 
 
-def test_unkoil_gen_exhausts_correctly():
+def test_unkoil_gen_exhausts_correctly() -> None:
     """unkoil_gen yields all values and then raises StopIteration."""
     with Koil():
         gen = unkoil_gen(_simple_gen)
@@ -81,11 +82,11 @@ def test_unkoil_gen_exhausts_correctly():
             next(gen)
 
 
-async def _single_value_gen():
+async def _single_value_gen() -> AsyncGenerator[int, None]:
     yield 99
 
 
-def test_unkoil_gen_single_value():
+def test_unkoil_gen_single_value() -> None:
     """unkoil_gen works for a generator that yields exactly one value."""
     with Koil():
         gen = unkoil_gen(_single_value_gen)

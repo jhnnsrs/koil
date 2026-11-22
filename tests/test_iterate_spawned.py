@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Generator
 
 import pytest
 
@@ -12,7 +13,7 @@ async def sleep(ins: int) -> int:
     return ins
 
 
-def iterating():
+def iterating() -> Generator[int, None, None]:
     yield 1
     time.sleep(0.001)
     yield 2
@@ -20,7 +21,7 @@ def iterating():
     yield 3
 
 
-async def test_iterating():
+async def test_iterating() -> None:
     async with Koil():
         t = iterate_threaded(iterating)
         assert await anext(t) == 1
@@ -31,16 +32,16 @@ async def test_iterating():
         except StopAsyncIteration:
             pass
         else:
-            assert False, "Should have raised StopAsyncIteration"
+            raise AssertionError("Should have raised StopAsyncIteration")
 
 
-def echoing():
+def echoing() -> Generator[int, int, None]:
     val = yield 1
     val = yield val + 1
     yield val + 1
 
 
-async def test_iterate_spawned_send():
+async def test_iterate_spawned_send() -> None:
     """Values sent into the async generator are delivered into the sync generator."""
     async with Koil():
         agen = iterate_threaded(echoing)
@@ -51,11 +52,11 @@ async def test_iterate_spawned_send():
             await agen.asend(None)
 
 
-async def test_iterate_spawned_closes_generator_on_early_exit():
+async def test_iterate_spawned_closes_generator_on_early_exit() -> None:
     """Closing the async generator early runs the sync generator's finally block."""
     cleaned: list[bool] = []
 
-    def gen():
+    def gen() -> Generator[int, None, None]:
         try:
             yield 1
             yield 2

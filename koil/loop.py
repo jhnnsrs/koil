@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Protocol, TypeVar
 
 from koil.context import (
     ambient_koil,
@@ -59,10 +59,13 @@ SHUTDOWN_MARGIN: float = 0.5
 DEFAULT_MAX_WORKERS: int = max(64, (os.cpu_count() or 1) * 4)
 
 
+_KoilProtocolT = TypeVar("_KoilProtocolT", bound="KoilProtocol")
+
+
 class KoilProtocol(Protocol):
     """Minimal protocol satisfied by any synchronous context manager."""
 
-    def __enter__(self) -> Self: ...
+    def __enter__(self: _KoilProtocolT) -> _KoilProtocolT: ...
 
     def __exit__(
         self,

@@ -21,6 +21,7 @@ from typing import (
     Any,
     Generic,
     ParamSpec,
+    Protocol,
     TypeVar,
 )
 
@@ -34,7 +35,7 @@ from koil.context import (
     loop_state,
 )
 from koil.errors import CancelledError, KoilTimeoutError, ThreadCancelledError
-from koil.protocols import IteratorSignalProtocol, TaskSignalProtocol
+from koil.protocols import IteratorSignalProtocol, SignalProtocol, TaskSignalProtocol
 from koil.tracebacks import prune_traceback, should_rewrite
 from koil.types import AnyCallable
 
@@ -202,7 +203,23 @@ def aclose_async_gen_threadsafe(
         )
 
 
-def _safe_set_event(event: Any) -> None:
+class _Settable(Protocol):
+    """An event this module may set: koil's own, or a foreign one."""
+
+    def set(self) -> None: ...
+
+
+class _LifecycleSignals(Protocol):
+    """The signals a bridged call reports failure on (Qt's signal holders)."""
+
+    @property
+    def errored(self) -> SignalProtocol[BaseException]: ...
+
+    @property
+    def cancelled(self) -> SignalProtocol[CancelledError]: ...
+
+
+def _safe_set_event(event: "_Settable") -> None:
     """Set *event*, tolerating a closed event loop.
 
     A foreign event that routes through ``call_soon_threadsafe`` raises
@@ -262,7 +279,7 @@ def _call_threadsafe(
 
 
 def _watch(
-    event: Any,
+    event: object,
     loop: asyncio.AbstractEventLoop,
     callback: Callable[..., Any],
     *args: Any,
@@ -282,7 +299,7 @@ def _noop() -> None:
     return None
 
 
-def _emit(signal: Any, *args: Any) -> None:
+def _emit(signal: SignalProtocol[T], *args: T) -> None:
     """Emit a lifecycle signal; a failing receiver must not cost the caller its result."""
     try:
         signal.emit(*args)
@@ -291,9 +308,9 @@ def _emit(signal: Any, *args: Any) -> None:
 
 
 def _settle(
-    future: "concurrent.futures.Future[Any]",
+    future: "concurrent.futures.Future[T]",
     *,
-    value: Any = _MISSING,
+    value: T = _MISSING,
     error: BaseException | None = None,
 ) -> bool:
     """Resolve *future* unless something else already did; returns whether we did."""
@@ -598,8 +615,8 @@ class _Call:
         context: contextvars.Context,
         timeout: float | None,
         grace: float,
-        signals: Any,
-        finished: Any,
+        signals: "_LifecycleSignals | None",
+        finished: "SignalProtocol[Any] | None",
         noun: str,
         blocked_call: BlockedCall | None,
     ) -> None:
@@ -657,7 +674,7 @@ class _Call:
             _emit(self.signals.errored, error)
 
     def _finish(
-        self, *, value: Any = _MISSING, error: BaseException | None = None
+        self, *, value: object = _MISSING, error: BaseException | None = None
     ) -> bool:
         for handle in (self.timer, self.grace_timer):
             if handle is not None:
@@ -691,14 +708,16 @@ class _Call:
             error = _reason_error(self.reason, self.timeout, self.noun)
         else:
             result = task.result()
-            if self._finish(value=result) and self.signals:
+            if self._finish(value=result) and self.signals and self.finished:
                 _emit(self.finished, result if self.noun == "Task" else None)
             return
 
         if self._finish(error=error) and self.signals:
             # A timeout is an error, not a cancellation.
             if isinstance(error, (CancelledError, ThreadCancelledError)):
-                _emit(self.signals.cancelled, error)
+                # A cancelled worker thread reports its ThreadCancelledError
+                # on the same signal.
+                _emit(self.signals.cancelled, error)  # pyright: ignore[reportArgumentType]
             else:
                 _emit(self.signals.errored, error)
 
@@ -707,8 +726,8 @@ def _submit(
     make: Callable[[], Awaitable[Any]],
     loop: asyncio.AbstractEventLoop,
     timeout: float | None,
-    signals: Any,
-    finished: Any,
+    signals: "_LifecycleSignals | None",
+    finished: "SignalProtocol[Any] | None",
     noun: str,
     blocking: bool,
 ) -> "KoilFuture[Any]":
@@ -909,7 +928,7 @@ class _Step:
 
     def __init__(
         self,
-        send_value: Any,
+        send_value: object,
         context: contextvars.Context,
         future: "concurrent.futures.Future[Any]",
         blocked_call: BlockedCall,
@@ -963,7 +982,7 @@ class AsyncGenDriver(Generic[T]):
 
     # -- sync side ---------------------------------------------------------
 
-    def step(self, send_value: Any = None) -> KoilFuture[T]:
+    def step(self, send_value: object = None) -> KoilFuture[T]:
         """Ask the generator for its next value; resolves like an ``unkoil`` call.
 
         The future raises :class:`StopAsyncIteration` when the generator is
@@ -1089,7 +1108,11 @@ class AsyncGenDriver(Generic[T]):
         )
 
     def _finish(
-        self, step: _Step, *, value: Any = _MISSING, error: BaseException | None = None
+        self,
+        step: _Step,
+        *,
+        value: object = _MISSING,
+        error: BaseException | None = None,
     ) -> None:
         for handle in (step.timer, step.grace_timer):
             if handle is not None:

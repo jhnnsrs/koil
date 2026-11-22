@@ -7,6 +7,9 @@ import pytest
 pytest.importorskip("PyQt5")
 pytest.importorskip("pytestqt")
 
+from collections.abc import AsyncGenerator
+from typing import Any, Never
+
 from PyQt5 import QtCore, QtWidgets
 from pytestqt.qtbot import QtBot  # type: ignore
 
@@ -29,24 +32,24 @@ async def sleep_and_resolve() -> int:
     return 1
 
 
-async def sleep_and_raise():
+async def sleep_and_raise() -> Never:
     await asyncio.sleep(0.1)
     raise Exception("Task is done!")
 
 
-async def sleep_and_use_context():
+async def sleep_and_use_context() -> int:
     await asyncio.sleep(0.1)
     return x.get() + 1
 
 
-async def sleep_and_yield(times: int = 5):
+async def sleep_and_yield(times: int = 5) -> AsyncGenerator[int, None]:
     for i in range(times):
         await asyncio.sleep(0.1)
         yield i
 
 
 class KoiledWidget(QtWidgets.QWidget):
-    def __init__(self, parent: QtWidgets.QWidget | None = None):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent=parent, flags=QtCore.Qt.WindowFlags())
         self.koil = create_qt_koil(self)
         self.button_greet = QtWidgets.QPushButton("Greet")
@@ -60,12 +63,12 @@ class KoiledWidget(QtWidgets.QWidget):
 
         self.button_greet.clicked.connect(self.greet)
 
-    def greet(self):
+    def greet(self) -> None:
         self.greet_label.setText("Hello!")
 
 
 class KoiledInterferingWidget(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.koil = create_qt_koil(self)
 
@@ -101,25 +104,25 @@ class KoiledInterferingWidget(QtWidgets.QWidget):
         self.call_context_button.clicked.connect(self.call_context)
         self.call_raise_button.clicked.connect(self.call_raise)
 
-    def call_task(self):
+    def call_task(self) -> None:
         self._task = self.sleep_and_resolve_task.run()
 
-    def call_gen(self):
+    def call_gen(self) -> None:
         self.sleep_and_yield_task.run()
 
-    def call_context(self):
+    def call_context(self) -> None:
         self.sleep_and_use_context_task.run()
 
-    def call_raise(self):
+    def call_raise(self) -> None:
         self.sleep_and_raise_task.run()
 
-    def task_finished(self, int: int):
+    def task_finished(self, int: int) -> None:
         self.value = int
         self.greet_label.setText("Hello!")
 
 
 class KoiledInterferingFutureWidget(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.koil = create_qt_koil(self)
 
@@ -142,14 +145,14 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
 
         self.call_task_button.clicked.connect(self.call_task)
 
-    def in_qt_task(self, future: QtFuture[str]):
+    def in_qt_task(self, future: QtFuture[str]) -> None:
         self.task_was_run = True
         future.resolve("called")
 
-    def call_task(self):
+    def call_task(self) -> None:
         self.my_coro_task.run()
 
-    def task_finished(self, both: tuple[str, str]):
+    def task_finished(self, both: tuple[str, str]) -> None:
         str = both[0] + " " + both[1]
         self.greet_label.setText(str)
 
@@ -159,7 +162,7 @@ class KoiledInterferingFutureWidget(QtWidgets.QWidget):
 
 
 class KoiledGeneratorWidget(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.koil = create_qt_koil(self)
         self._task = None
@@ -183,18 +186,18 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
 
         self.call_task_button.clicked.connect(self.call_task)
 
-    def in_qt_task(self, future: QtFuture[str]):
+    def in_qt_task(self, future: QtFuture[str]) -> None:
         self.task_was_run = True
         future.resolve("called")
 
-    def iterator(self, iterator: QtGenerator[int], number: int = 5):
+    def iterator(self, iterator: QtGenerator[int], number: int = 5) -> None:
         for i in range(number):
             iterator.next(i)
 
-    def call_task(self):
+    def call_task(self) -> None:
         self._task = self.my_coro.run()
 
-    def task_finished(self, _: None):
+    def task_finished(self, _: None) -> None:
         self.greet_label.setText("Hello!")
 
     async def acall_coro(self) -> None:
@@ -203,7 +206,7 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
 
 
 @pytest.mark.qt
-def test_koil_qt_no_interference(qtbot: QtBot):
+def test_koil_qt_no_interference(qtbot: QtBot) -> None:
     """Tests if just adding koil interferes with normal
     qtpy widgets.
 
@@ -220,7 +223,7 @@ def test_koil_qt_no_interference(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_koil_qt_call_task(qtbot: QtBot):
+def test_koil_qt_call_task(qtbot: QtBot) -> None:
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
     qtbot.addWidget(widget)  # type: ignore
@@ -233,7 +236,7 @@ def test_koil_qt_call_task(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_call_gen(qtbot: QtBot):
+def test_call_gen(qtbot: QtBot) -> None:
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
     qtbot.addWidget(widget)  # type: ignore
@@ -247,7 +250,7 @@ def test_call_gen(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_call_future(qtbot: QtBot):
+def test_call_future(qtbot: QtBot) -> None:
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingFutureWidget()
     qtbot.addWidget(widget)  # type: ignore
@@ -262,19 +265,19 @@ def test_call_future(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_call_raise(qtbot: QtBot):
+def test_call_raise(qtbot: QtBot) -> None:
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
     qtbot.addWidget(widget)  # type: ignore
 
     # click in the Greet button and make sure it updates the appropriate label
 
-    with qtbot.waitSignal(widget.sleep_and_raise_task.errored, timeout=1000) as b:  # type: ignore
+    with qtbot.waitSignal(widget.sleep_and_raise_task.errored, timeout=1000):  # type: ignore
         qtbot.mouseClick(widget.call_raise_button, QtCore.Qt.LeftButton)  # type: ignore
 
 
 @pytest.mark.qt
-def test_context(qtbot: QtBot):
+def test_context(qtbot: QtBot) -> None:
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
     qtbot.addWidget(widget)  # type: ignore
@@ -291,7 +294,7 @@ def test_context(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_qt_koil_forwards_config(qtbot: QtBot):
+def test_qt_koil_forwards_config(qtbot: QtBot) -> None:
     """QtKoil/create_qt_koil forward Koil constructor configuration."""
     widget = QtWidgets.QWidget()
     qtbot.addWidget(widget)  # type: ignore
@@ -311,17 +314,17 @@ def test_qt_koil_forwards_config(qtbot: QtBot):
 
 
 @pytest.mark.qt
-def test_async_to_qt_timeout_emits_errored(qtbot: QtBot):
+def test_async_to_qt_timeout_emits_errored(qtbot: QtBot) -> None:
     """A timed-out async task emits errored with KoilTimeoutError, not cancelled."""
     from koil.errors import KoilTimeoutError
 
     class TimeoutWidget(QtWidgets.QWidget):
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self.koil = create_qt_koil(parent=self)
             self.slow_task = async_to_qt(self.slow, timeout=0.05)
 
-        async def slow(self):
+        async def slow(self) -> None:
             await asyncio.sleep(5)
 
     widget = TimeoutWidget()
@@ -356,7 +359,7 @@ class ContextLeakWidget(QtWidgets.QWidget):
     main thread, the second slot reads it.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.koil = create_qt_koil(self)
         self.do_me = qt_to_async(self.in_qt_slot)
@@ -365,7 +368,7 @@ class ContextLeakWidget(QtWidgets.QWidget):
         self.with_task = async_to_qt(self.call_with_task)
         self.without_task = async_to_qt(self.call_without_task)
 
-    def in_qt_slot(self, future: QtFuture[str]):
+    def in_qt_slot(self, future: QtFuture[str]) -> None:
         self.seen.append(task.get())
         future.resolve("ok")
 
@@ -379,7 +382,7 @@ class ContextLeakWidget(QtWidgets.QWidget):
 
 
 @pytest.mark.qt
-def test_qt_slot_sees_its_callers_task_and_leaves_nothing_behind(qtbot: QtBot):
+def test_qt_slot_sees_its_callers_task_and_leaves_nothing_behind(qtbot: QtBot) -> None:
     """A contextvar reaches the Qt slot, and does not outlive the call.
 
     The Qt main thread is shared by every widget and lives as long as the app, so

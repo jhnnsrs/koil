@@ -3,7 +3,7 @@
 import pytest
 
 
-def test_helpers_unkoil_warns_and_resolves():
+def test_helpers_unkoil_warns_and_resolves() -> None:
     import koil.bridge
     import koil.helpers
 
@@ -11,7 +11,7 @@ def test_helpers_unkoil_warns_and_resolves():
         assert koil.helpers.unkoil is koil.bridge.unkoil
 
 
-def test_helpers_run_spawned_points_at_run_threaded():
+def test_helpers_run_spawned_points_at_run_threaded() -> None:
     import koil.bridge
     import koil.helpers
 
@@ -19,7 +19,7 @@ def test_helpers_run_spawned_points_at_run_threaded():
         assert koil.helpers.run_spawned is koil.bridge.run_threaded
 
 
-def test_helpers_iterate_spawned_points_at_iterate_threaded():
+def test_helpers_iterate_spawned_points_at_iterate_threaded() -> None:
     import koil.bridge
     import koil.helpers
 
@@ -27,12 +27,12 @@ def test_helpers_iterate_spawned_points_at_iterate_threaded():
         assert koil.helpers.iterate_spawned is koil.bridge.iterate_threaded
 
 
-def test_from_import_triggers_warning():
+def test_from_import_triggers_warning() -> None:
     with pytest.warns(DeprecationWarning):
         from koil.helpers import sleep  # noqa: F401
 
 
-def test_vars_shim_warns_and_resolves():
+def test_vars_shim_warns_and_resolves() -> None:
     import koil.context
     import koil.vars
 
@@ -40,7 +40,7 @@ def test_vars_shim_warns_and_resolves():
         assert koil.vars.global_koil is koil.context.global_koil
 
 
-def test_koil_shim_warns_and_resolves():
+def test_koil_shim_warns_and_resolves() -> None:
     import koil.koil
     import koil.loop
 
@@ -48,8 +48,8 @@ def test_koil_shim_warns_and_resolves():
         assert koil.koil.Koil is koil.loop.Koil
 
 
-def test_shim_unknown_attribute_raises_attribute_error():
+def test_shim_unknown_attribute_raises_attribute_error() -> None:
     import koil.helpers
 
     with pytest.raises(AttributeError):
-        koil.helpers.does_not_exist
+        _ = koil.helpers.does_not_exist

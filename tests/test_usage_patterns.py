@@ -16,7 +16,7 @@ import contextvars
 import threading
 import time
 from collections.abc import AsyncGenerator, Callable, Generator
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 
@@ -101,7 +101,10 @@ async def collect(
     return [returns async for returns in strategy(assign, **params)]
 
 
-async def _in_thread(fn: Callable[[], Any]) -> Any:
+_T = TypeVar("_T")
+
+
+async def _in_thread(fn: Callable[[], _T]) -> _T:
     return await asyncio.get_running_loop().run_in_executor(None, fn)
 
 
@@ -299,7 +302,8 @@ def test_a_detached_agent_is_cancelled_when_the_test_is_over() -> None:
         state["serving"] = True
         serving_started.set()
         try:
-            while True:
+            # An agent's serve loop, ticking until it is cancelled.
+            while True:  # noqa: ASYNC110
                 await asyncio.sleep(0.01)
         finally:
             state["stopped"] = True

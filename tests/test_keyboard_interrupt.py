@@ -175,7 +175,7 @@ def test_exit_abandons_wedged_loop_thread(caplog: pytest.LogCaptureFixture) -> N
     async def wedge() -> None:
         # A blocking call with no await: the event loop thread cannot run
         # call_soon_threadsafe(stop), so a naive unbounded join would hang.
-        time.sleep(2.0)
+        time.sleep(2.0)  # noqa: ASYNC251 - wedging the loop is the point
 
     k = Koil(shutdown_join_timeout=0.1)
     k.cancel_timeout = 0.1
