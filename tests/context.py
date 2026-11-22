@@ -1,9 +1,9 @@
 import asyncio
+import contextvars
 from types import TracebackType
 from typing import Self
-from koil.decorators import koilable
-import contextvars
 
+from koil.decorators import koilable
 
 t = contextvars.ContextVar("t", default=0)
 
@@ -27,14 +27,12 @@ class AsyncContextManager:
         exc_tb: TracebackType | None,
     ) -> None:
         pass
-    
-    def __enter__(self) -> Self:
-        ...
-        
+
+    def __enter__(self) -> Self: ...
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> None:
-        ...
+    ) -> None: ...

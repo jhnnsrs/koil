@@ -1,8 +1,10 @@
 import asyncio
-from koil.composition.base import KoiledModel
+
+import pytest
+
 from koil import Koil
 from koil.bridge import unkoil
-import pytest
+from koil.composition.base import KoiledModel
 
 
 class Kant(KoiledModel):

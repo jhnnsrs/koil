@@ -23,8 +23,8 @@ from collections.abc import Callable
 import pytest
 
 from koil.bridge import run_threaded, unkoil, unkoil_gen, unkoil_task
-from koil.loop import Koil, get_threaded_loop
 from koil.context import current_cancel_event, global_koil_loop
+from koil.loop import Koil, get_threaded_loop
 
 
 # --------------------------------------------------------------------------- #
@@ -429,7 +429,7 @@ async def test_nested_unkoil_in_run_spawned_cancels_promptly():
 # --------------------------------------------------------------------------- #
 def test_qt_guarded_setters_ignore_double_resolution():
     pytest.importorskip("PyQt5")
-    from koil.qt import _set_future_result, _set_future_exception
+    from koil.qt import _set_future_exception, _set_future_result
 
     async def check():
         loop = asyncio.get_running_loop()

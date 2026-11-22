@@ -113,7 +113,9 @@ def test_blocked_workers_leave_the_loops_default_executor_free() -> None:
 
     async def main() -> str:
         loop = asyncio.get_running_loop()
-        blocked = [asyncio.ensure_future(run_threaded(release.wait)) for _ in range(count)]
+        blocked = [
+            asyncio.ensure_future(run_threaded(release.wait)) for _ in range(count)
+        ]
         try:
             await asyncio.sleep(0.1)
             return await asyncio.wait_for(

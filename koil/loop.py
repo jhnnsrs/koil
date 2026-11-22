@@ -4,11 +4,14 @@ This module provides :class:`Koil`, the primary context manager that starts a
 dedicated asyncio event loop on a background thread so that async code can be
 called from synchronous call sites via :mod:`koil.bridge`.
 """
+
 import asyncio
+import logging
 import os
 import threading
 from types import TracebackType
 from typing import Protocol, Self
+
 from koil.context import (
     ambient_koil,
     global_koil,
@@ -18,7 +21,6 @@ from koil.context import (
 )
 from koil.errors import CancelledError, ContextError
 from koil.executor import KoilExecutor
-import logging
 
 try:
     import uvloop  # type: ignore[import]

@@ -42,7 +42,6 @@ from koil.bridge import get_koiled_loop_or_raise, run_threaded, unkoil, unkoil_t
 from koil.errors import ThreadCancelledError
 from koil.utils import aclose_async_gen_threadsafe, run_async_sharing_context
 
-
 # --------------------------------------------------------------------------- #
 # Bug #1 — a consumed cancellation must not poison later unkoil() calls        #
 # --------------------------------------------------------------------------- #
@@ -319,4 +318,6 @@ def test_sigint_during_blocking_unkoil_allows_clean_teardown() -> None:
         pytest.fail(f"child hung after SIGINT (no clean teardown); output:\n{out}")
 
     assert "teardown-done" in out, f"teardown did not complete; output:\n{out}"
-    assert proc.returncode == 130, f"unexpected exit code {proc.returncode}; output:\n{out}"
+    assert proc.returncode == 130, (
+        f"unexpected exit code {proc.returncode}; output:\n{out}"
+    )

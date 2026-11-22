@@ -18,11 +18,11 @@ Each test carries a tight ``@pytest.mark.timeout`` so a regression fails fast
 instead of hanging the suite.
 """
 
+import _thread
 import asyncio
 import logging
 import threading
 import time
-import _thread
 
 import pytest
 

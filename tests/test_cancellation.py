@@ -1,13 +1,14 @@
 import asyncio
 import threading
 import time
+
 import pytest
 
-from koil.composition.base import KoiledModel
-from koil.errors import KoilError, ThreadCancelledError
 from koil.bridge import iterate_threaded, run_threaded, sleep
-from koil.loop import Koil
+from koil.composition.base import KoiledModel
 from koil.context import check_cancelled, current_cancel_event, global_koil
+from koil.errors import KoilError, ThreadCancelledError
+from koil.loop import Koil
 
 
 class CoopWorker(KoiledModel):

@@ -81,8 +81,9 @@ pip install koil[qtpy]
 ```python
 from koil import Koil, unkoil
 
-async def fetch(url: str) -> str:
-    ...  # real async work
+
+async def fetch(url: str) -> str: ...  # real async work
+
 
 with Koil():
     result = unkoil(fetch, "https://example.com")
@@ -94,12 +95,12 @@ All options have sensible defaults; you only pass what you want to change:
 
 ```python
 with Koil(
-    sync_in_async=True,        # allow koil's sync bridges inside a running loop
-    uvify=True,                # use uvloop for the background loop if installed
+    sync_in_async=True,  # allow koil's sync bridges inside a running loop
+    uvify=True,  # use uvloop for the background loop if installed
     shutdown_join_timeout=None,  # extra grace on teardown (None = 5.0s default)
-    rewrite_tracebacks=True,   # hide koil-internal frames in user tracebacks
-    cancel_timeout=2.0,        # grace for workers to acknowledge cancellation
-    max_workers=None,          # bound on run_threaded worker threads (None = default)
+    rewrite_tracebacks=True,  # hide koil-internal frames in user tracebacks
+    cancel_timeout=2.0,  # grace for workers to acknowledge cancellation
+    max_workers=None,  # bound on run_threaded worker threads (None = default)
 ):
     ...
 ```
@@ -184,12 +185,14 @@ This is in contrast to libraries like asgiref's `async_to_sync`, which creates (
 ```python
 from koil import Koil, unkoil
 
+
 async def compute(x: int) -> int:
     await asyncio.sleep(0.1)
     return x * 2
 
+
 with Koil():
-    result = unkoil(compute, 21)   # 42
+    result = unkoil(compute, 21)  # 42
 ```
 
 ### `unkoil_gen` — consume an async generator as a sync `for` loop
@@ -197,14 +200,16 @@ with Koil():
 ```python
 from koil import Koil, unkoil_gen
 
+
 async def stream():
     for i in range(5):
         await asyncio.sleep(0.1)
         yield i
 
+
 with Koil():
     for value in unkoil_gen(stream):
-        print(value)   # 0 1 2 3 4
+        print(value)  # 0 1 2 3 4
 ```
 
 ### `unkoil_task` — fire and forget, get a future back
@@ -215,7 +220,7 @@ from koil import Koil, unkoil_task
 with Koil():
     future = unkoil_task(compute, 21)
     # do other work
-    result = future.result()   # blocks until done; future.cancel() signals cancellation
+    result = future.result()  # blocks until done; future.cancel() signals cancellation
 ```
 
 ---
@@ -280,16 +285,19 @@ from koil import Koil, unkoil, sleep
 from koil.bridge import run_threaded
 import time
 
+
 def slow_computation(n: int) -> int:
     sleep(1)
     return n * 2
+
 
 async def pipeline(n: int) -> int:
     result = await run_threaded(slow_computation, n)
     return result
 
+
 with Koil():
-    print(unkoil(pipeline, 21))   # 42, loop stayed responsive during the sleep
+    print(unkoil(pipeline, 21))  # 42, loop stayed responsive during the sleep
 ```
 
 ### `iterate_threaded` — consume a sync generator from inside async code
@@ -297,10 +305,12 @@ with Koil():
 ```python
 from koil.bridge import iterate_threaded
 
+
 def blocking_source(n: int):
     for i in range(n):
         sleep(0.1)
         yield i
+
 
 async def consume():
     async for value in iterate_threaded(blocking_source, 5):
@@ -321,12 +331,14 @@ If the asyncio task awaiting `run_threaded` is cancelled, koil immediately sets 
 from koil import check_cancelled, sleep
 from koil.bridge import run_threaded
 
+
 def long_job(n: int) -> int:
     for i in range(n):
-        check_cancelled()   # raises ThreadCancelledError if cancelled, any unkoil call here has it implicitly
-        sleep(0.1) # also koil sleeps are cancellation points, 
+        check_cancelled()  # raises ThreadCancelledError if cancelled, any unkoil call here has it implicitly
+        sleep(0.1)  # also koil sleeps are cancellation points,
         # time.sleep(0.1) would work too but would not be interruptible until the sleep finishes (don't use it)
     return n
+
 
 async def run():
     task = asyncio.create_task(run_threaded(long_job, 100))
@@ -335,7 +347,7 @@ async def run():
     try:
         await task
     except asyncio.CancelledError:
-        pass   # long_job was interrupted cleanly
+        pass  # long_job was interrupted cleanly
 ```
 
 Once a worker is cancelled it *stays* cancelled: every later `check_cancelled()`, `sleep()` and `unkoil()` in it raises `ThreadCancelledError`. That is what makes it stop — and it would also stop the cleanup on its way out. Cleanup that still has to call async code goes inside `shielded()`:
@@ -343,11 +355,12 @@ Once a worker is cancelled it *stays* cancelled: every later `check_cancelled()`
 ```python
 from koil import shielded, unkoil
 
+
 def long_job(connection) -> None:
     try:
         work(connection)
     finally:
-        with shielded():               # the cancel signal is hidden in here
+        with shielded():  # the cancel signal is hidden in here
             unkoil(connection.aclose)
 ```
 
@@ -363,7 +376,7 @@ from koil import CancelledError, Koil, unkoil_task
 with Koil():
     future = unkoil_task(some_long_coroutine)
     # later:
-    future.cancel()   # cancels the coroutine on the koil loop — this future only
+    future.cancel()  # cancels the coroutine on the koil loop — this future only
     try:
         future.result()
     except CancelledError:
@@ -385,10 +398,11 @@ with Koil():
 ```python
 from koil import sleep, check_cancelled
 
+
 def worker():
     for _ in range(10):
         check_cancelled()
-        sleep(1.0)   # cooperative, cancelled immediately if the task is cancelled
+        sleep(1.0)  # cooperative, cancelled immediately if the task is cancelled
 ```
 
 ---
@@ -403,12 +417,14 @@ from koil import Koil, unkoil
 
 request_id: ContextVar[str] = ContextVar("request_id")
 
+
 async def handler() -> str:
-    return request_id.get()   # sees the value set by the sync caller
+    return request_id.get()  # sees the value set by the sync caller
+
 
 with Koil():
     request_id.set("req-123")
-    print(unkoil(handler))   # "req-123"
+    print(unkoil(handler))  # "req-123"
 ```
 
 ---
@@ -424,10 +440,12 @@ result. Async generators work too (sync callers get a regular generator).
 from koil import Koil, koiled
 import asyncio
 
+
 @koiled
 async def fetch(url: str) -> str:
     await asyncio.sleep(0.1)
     return f"<{url}>"
+
 
 @koiled
 async def stream(n: int):
@@ -435,11 +453,13 @@ async def stream(n: int):
         await asyncio.sleep(0.01)
         yield i
 
+
 # Sync caller
 with Koil():
-    print(fetch("https://example.com"))    # blocks, returns the str
+    print(fetch("https://example.com"))  # blocks, returns the str
     for item in stream(3):
         print(item)
+
 
 # Async caller — same functions
 async def main():
@@ -474,14 +494,15 @@ exit (also when `__aenter__` raises).
 from koil import koilable, koiled
 import asyncio
 
+
 @koilable
 class DataStream:
     async def __aenter__(self):
-        await asyncio.sleep(0)   # connect
+        await asyncio.sleep(0)  # connect
         return self
 
     async def __aexit__(self, *args):
-        await asyncio.sleep(0)   # disconnect
+        await asyncio.sleep(0)  # disconnect
 
     @koiled
     async def fetch(self) -> int:
@@ -507,6 +528,7 @@ with DataStream() as ds:
 ```python
 from koil.composition import KoiledModel
 
+
 class MyService(KoiledModel):
     url: str
 
@@ -517,6 +539,7 @@ class MyService(KoiledModel):
     async def __aexit__(self, *args):
         # teardown
         pass
+
 
 with MyService(url="http://example.com") as svc:
     ...
@@ -531,6 +554,7 @@ koil's Qt integration runs the asyncio loop on a background thread and uses Qt s
 ```python
 from koil.qt import async_to_qt, qt_to_async, QtFuture, create_qt_koil
 from qtpy import QtWidgets
+
 
 class MyWidget(QtWidgets.QWidget):
     def __init__(self):

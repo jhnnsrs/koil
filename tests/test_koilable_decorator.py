@@ -1,12 +1,12 @@
 import asyncio
 import inspect
+
 import pytest
 
-from koil.decorators import koilable
 from koil.bridge import unkoil
-from koil.loop import Koil
 from koil.context import global_koil
-
+from koil.decorators import koilable
+from koil.loop import Koil
 
 # ---------------------------------------------------------------------------
 # Helpers

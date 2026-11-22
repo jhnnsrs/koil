@@ -46,6 +46,8 @@ def __getattr__(name: str) -> Any:
             f"import {target} from {module} instead"
         )
     else:
-        message = f"koil.helpers.{name} is deprecated; import {target} from {module} instead"
+        message = (
+            f"koil.helpers.{name} is deprecated; import {target} from {module} instead"
+        )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
     return getattr(importlib.import_module(module), target)

@@ -23,7 +23,6 @@ from koil.bridge import (
 )
 from koil.tracebacks import prune_traceback
 
-
 # The actual installed package directory — a substring check like
 # "/koil/koil/" breaks on CI, where the checkout root is .../koil/koil and
 # therefore *every* repo file (this test included) matches.
@@ -39,7 +38,9 @@ def koil_frames(e: BaseException):
 
 
 def futures_frames(e: BaseException):
-    return [f for f in frames(e) if "concurrent/futures" in f.filename.replace("\\", "/")]
+    return [
+        f for f in frames(e) if "concurrent/futures" in f.filename.replace("\\", "/")
+    ]
 
 
 async def user_async():

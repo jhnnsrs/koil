@@ -1,6 +1,5 @@
-from typing import Any, Optional
 from collections.abc import Callable
-
+from typing import Any, Optional
 
 Contextual = Optional
 """ Contextual is a type alias for Optional[Any] , it is used to declare that

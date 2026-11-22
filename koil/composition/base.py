@@ -1,8 +1,10 @@
 import logging
 from types import TracebackType
-from pydantic import BaseModel, ConfigDict, PrivateAttr
-from koil.decorators import koilable
 from typing import Any, Self, TypeVar
+
+from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+from koil.decorators import koilable
 from koil.loop import Koil
 
 T = TypeVar("T")
@@ -56,7 +58,9 @@ class KoiledModel(BaseModel):
     def __deepcopy__(self: Self, memo: dict[int, Any] | None = None) -> Self:
         # The Koil holds a thread and a loop, neither of which can be deep
         # copied; step around it and leave the copy without one.
-        state = {key: self.__dict__.pop(key) for key in _KOIL_STATE if key in self.__dict__}
+        state = {
+            key: self.__dict__.pop(key) for key in _KOIL_STATE if key in self.__dict__
+        }
         try:
             return super().__deepcopy__(memo)
         finally:

@@ -1,13 +1,11 @@
 import asyncio
+import time
 from collections.abc import AsyncGenerator
 
-
-from koil import unkoil, koilable
-from koil.composition.base import KoiledModel
+from koil import koilable, unkoil
 from koil.bridge import iterate_threaded, run_threaded, unkoil_gen, unkoil_task
-from koil.loop import Koil
+from koil.composition.base import KoiledModel
 from koil.context import check_cancelled
-import time
 
 
 @koilable()
@@ -64,9 +62,7 @@ class X(KoiledModel):
 
 
 async def test_async():
-    
-    
-    
+
     async with X(x=1) as x:
         x = asyncio.create_task(x.t())
         await asyncio.sleep(0.02)

@@ -8,20 +8,22 @@ loop while propagating the caller's :class:`~contextvars.Context` and
 cancellation event; :class:`AsyncGenDriver` does the same for an async
 generator a sync consumer steps through.
 """
+
 import asyncio
-import contextvars
 import concurrent.futures
+import contextvars
+import inspect
+import logging
 import threading
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import (
     Any,
     Generic,
     ParamSpec,
     TypeVar,
 )
-from collections.abc import AsyncIterator, Awaitable, Callable
-from koil.errors import CancelledError, KoilTimeoutError, ThreadCancelledError
-from koil.types import AnyCallable
+
 from koil.context import (
     INTERNAL_VARS,
     BlockedCall,
@@ -31,10 +33,10 @@ from koil.context import (
     global_koil,
     loop_state,
 )
+from koil.errors import CancelledError, KoilTimeoutError, ThreadCancelledError
+from koil.protocols import IteratorSignalProtocol, TaskSignalProtocol
 from koil.tracebacks import prune_traceback, should_rewrite
-import inspect
-import logging
-from koil.protocols import TaskSignalProtocol, IteratorSignalProtocol
+from koil.types import AnyCallable
 
 logger = logging.getLogger(__name__)
 
@@ -654,7 +656,9 @@ class _Call:
         if self._finish(error=error) and self.signals:
             _emit(self.signals.errored, error)
 
-    def _finish(self, *, value: Any = _MISSING, error: BaseException | None = None) -> bool:
+    def _finish(
+        self, *, value: Any = _MISSING, error: BaseException | None = None
+    ) -> bool:
         for handle in (self.timer, self.grace_timer):
             if handle is not None:
                 handle.cancel()
@@ -731,7 +735,7 @@ def _submit(
         # Nobody blocks on a detached task.
         context.run(blocked_calls.set, ())
 
-    future: "concurrent.futures.Future[Any]" = concurrent.futures.Future()
+    future: concurrent.futures.Future[Any] = concurrent.futures.Future()
     own_cancel_event = KoilThreadSafeEvent(loop)
     call = _Call(
         loop,
@@ -949,11 +953,11 @@ class AsyncGenDriver(Generic[T]):
         self._timeout = timeout
         self._grace = _cancel_grace(global_koil.get())
         self._context = contextvars.copy_context()
-        self._steps: "asyncio.Queue[_Step | None]" = asyncio.Queue()
+        self._steps: asyncio.Queue[_Step | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self._current: _Step | None = None
         self._last: KoilFuture[T] | None = None
-        self._close_future: "concurrent.futures.Future[None] | None" = None
+        self._close_future: concurrent.futures.Future[None] | None = None
         self._close_requested = False
         self._close_error: BaseException | None = None
 
@@ -974,7 +978,7 @@ class AsyncGenDriver(Generic[T]):
         blocked_call = BlockedCall(threading.get_ident())
         context.run(blocked_calls.set, blocked_calls.get() + (blocked_call,))
 
-        future: "concurrent.futures.Future[Any]" = concurrent.futures.Future()
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
         own_cancel_event = KoilThreadSafeEvent(self._loop)
         step = _Step(send_value, context, future, blocked_call)
 
@@ -1020,7 +1024,7 @@ class AsyncGenDriver(Generic[T]):
             self._begin_close(None)
             return
 
-        close_future: "concurrent.futures.Future[None]" = concurrent.futures.Future()
+        close_future: concurrent.futures.Future[None] = concurrent.futures.Future()
         try:
             _track(self._loop, close_future)
             self._loop.call_soon_threadsafe(self._begin_close, close_future)
@@ -1147,7 +1151,9 @@ class AsyncGenDriver(Generic[T]):
         if self._close_requested:
             self._resolve_close()
 
-    def _begin_close(self, close_future: "concurrent.futures.Future[None] | None") -> None:
+    def _begin_close(
+        self, close_future: "concurrent.futures.Future[None] | None"
+    ) -> None:
         self._close_requested = True
         self._close_future = close_future
         task = self._ensure_task()

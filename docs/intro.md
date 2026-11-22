@@ -39,13 +39,13 @@ class AmazingAsyncAPI:
     async def __aexit__(self, *args, **kwargs):
         # amazing tear down logic
         return self
-
 ```
 
 However if somebody wants to use this api in sync environment they are in for a good one, as a call to asyncio.run() just wont do the trick.
 
 ```python
 from koil import koilable, unkoilable
+
 
 @koilable()
 class AmazingAsyncAPI:
@@ -64,14 +64,13 @@ class AmazingAsyncAPI:
     async def __aexit__(self, *args, **kwargs):
         # amazing tear down logic
         return self
-
 ```
 
 And now it works. Just use your Api with a normal context manager.
 
 ```python
 with AmazingAsyncAPI as e:
-  print(e.sleep())
+    print(e.sleep())
 ```
 
 Koil under the hood spawns a new event loop in another thread, calls functions that are marked with unkoilable
@@ -81,18 +80,16 @@ If you have multiple context managers or tasks that you would just like to run i
 also create a loop in another thread
 
 ```python
-
 async def task(arg):
-       x = await ...
-       return x
+    x = await ...
+    return x
 
-with Koil(): # creates a threaded loop
 
+with Koil():  # creates a threaded loop
     x = unkoil(task, 1)
 
     with AmazingAsyncAPI as e:
-       print(e.sleep())
-
+        print(e.sleep())
 ```
 
 Moreover koil also is able to be used with generators
@@ -121,15 +118,14 @@ async def task(arg):
     await asyncio.sleep(2)
     return arg
 
+
 with Koil():
+    x = unkoil(task, 1, as_task=True)
 
-  x = unkoil(task, 1, as_task=True)
+    # do other stuff
 
-  # do other stuff
-
-  if x.done():
-      print(x)
-
+    if x.done():
+        print(x)
 ```
 
 ## PyQt Support

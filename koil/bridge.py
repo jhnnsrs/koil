@@ -36,12 +36,12 @@ from typing import Any, ParamSpec, TypeVar
 from koil.context import (
     INTERNAL_VARS,
     THREAD_STYLE_HINT,
-    koil_running_elsewhere,
     KoilThreadSafeEvent,
     blocked_calls,
     current_cancel_event,
     global_koil,
     global_koil_loop,
+    koil_running_elsewhere,
     loop_state,
 )
 from koil.errors import (
@@ -284,9 +284,7 @@ def unkoil_gen(
 
     # One task on the loop owns the generator for its whole life; each step of
     # this sync generator is handed to it (see AsyncGenDriver).
-    driver = AsyncGenDriver(
-        iterator(*args, **kwargs).__aiter__(), koil_loop, None
-    )
+    driver = AsyncGenDriver(iterator(*args, **kwargs).__aiter__(), koil_loop, None)
     try:
         send_val: Any = None
         while True:
@@ -345,9 +343,7 @@ def unkoil_gen_with_timeout(
 
     # One task on the loop owns the generator for its whole life; each step of
     # this sync generator is handed to it (see AsyncGenDriver).
-    driver = AsyncGenDriver(
-        iterator(*args, **kwargs).__aiter__(), koil_loop, timeout
-    )
+    driver = AsyncGenDriver(iterator(*args, **kwargs).__aiter__(), koil_loop, timeout)
     try:
         send_val: Any = None
         while True:
@@ -355,9 +351,7 @@ def unkoil_gen_with_timeout(
             # *into* the generator at the yield (GeneratorExit from close(), a
             # throw() from the consumer) never pass through the pruning handler.
             try:
-                value = driver.step(send_val).result(
-                    timeout=timeout_backstop(timeout)
-                )
+                value = driver.step(send_val).result(timeout=timeout_backstop(timeout))
             except StopAsyncIteration:
                 return
             except BaseException as e:
@@ -649,7 +643,7 @@ async def _run_threaded(
     pool_future = None
     if executor is not None:
         pool_future = executor.submit(wrapper, cancel_event, worker_context)
-        future: "asyncio.Future[R]" = asyncio.wrap_future(pool_future, loop=loop)
+        future: asyncio.Future[R] = asyncio.wrap_future(pool_future, loop=loop)
     else:
         future = loop.run_in_executor(None, wrapper, cancel_event, worker_context)
 

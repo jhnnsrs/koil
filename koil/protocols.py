@@ -1,14 +1,15 @@
-
+import contextvars
+from collections.abc import Callable
 from typing import (
     Generic,
-    TypeVar,
     Protocol,
+    TypeVar,
 )
-from collections.abc import Callable
-import contextvars
+
 from .errors import CancelledError
 
 T = TypeVar("T")
+
 
 class SignalProtocol(Protocol, Generic[T]):
     def connect(self, slot: Callable[[T], None]) -> None:
@@ -26,9 +27,8 @@ class SignalProtocol(Protocol, Generic[T]):
             *args (T): The arguments to emit.
         """
         ...
-        
-        
-        
+
+
 class TaskSignalProtocol(Protocol, Generic[T]):
     """Protocol for task signals."""
 
@@ -36,18 +36,18 @@ class TaskSignalProtocol(Protocol, Generic[T]):
     def cancelled(self) -> SignalProtocol[CancelledError]:
         """Signal that the task was cancelled."""
         ...
-    
-    @property  
+
+    @property
     def returned(self) -> SignalProtocol[tuple[T, contextvars.Context]]:
         """Signal that the task was finished with a result."""
         ...
-    
-    @property   
+
+    @property
     def errored(self) -> SignalProtocol[BaseException]:
         """Signal that the task was finished with an exception."""
         ...
-        
-        
+
+
 class IteratorSignalProtocol(Protocol, Generic[T]):
     """Protocol for iterator signals."""
 
@@ -55,18 +55,18 @@ class IteratorSignalProtocol(Protocol, Generic[T]):
     def cancelled(self) -> SignalProtocol[CancelledError]:
         """Signal that the iterator was cancelled."""
         ...
-    
-    @property  
+
+    @property
     def next(self) -> SignalProtocol[tuple[T, contextvars.Context]]:
         """Signal that the iterator was finished with a result."""
         ...
-        
+
     @property
     def done(self) -> SignalProtocol[None]:
         """Signal that the iterator was finished."""
         ...
-    
-    @property   
+
+    @property
     def errored(self) -> SignalProtocol[BaseException]:
         """Signal that the iterator was finished with an exception."""
         ...

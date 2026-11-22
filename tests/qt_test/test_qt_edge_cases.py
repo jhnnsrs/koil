@@ -130,7 +130,9 @@ def test_a_slot_that_raises_fails_the_call() -> None:
         asyncio.run(main())
 
 
-def test_blocking_the_qt_thread_on_a_call_that_needs_it_raises_instead_of_hanging() -> None:
+def test_blocking_the_qt_thread_on_a_call_that_needs_it_raises_instead_of_hanging() -> (
+    None
+):
     """``unkoil`` on the Qt thread, on a coroutine that waits for a slot there."""
     wrapped = qt_to_async(lambda future: future.resolve(1))
 

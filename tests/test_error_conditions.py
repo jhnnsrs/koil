@@ -1,11 +1,12 @@
 import asyncio
 import threading
+
 import pytest
 
-from koil.errors import ContextError, KoilError, ThreadCancelledError
 from koil.bridge import get_koiled_loop_or_raise, unkoil, unkoil_gen, unkoil_task
-from koil.loop import Koil
 from koil.context import check_cancelled, current_cancel_event, global_koil_loop
+from koil.errors import ContextError, KoilError, ThreadCancelledError
+from koil.loop import Koil
 
 
 async def _noop() -> int:

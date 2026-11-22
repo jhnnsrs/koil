@@ -95,7 +95,9 @@ async def threaded_gen(
         yield returns
 
 
-async def collect(strategy: Callable[..., Any], assign: Callable[..., Any], **params: Any) -> list[Any]:
+async def collect(
+    strategy: Callable[..., Any], assign: Callable[..., Any], **params: Any
+) -> list[Any]:
     return [returns async for returns in strategy(assign, **params)]
 
 

@@ -3,30 +3,33 @@ import contextvars
 import inspect
 import logging
 import threading
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import (
     Any,
-    Generic,
-    TypeVar,
     Concatenate,
+    Generic,
     ParamSpec,
+    TypeVar,
     cast,
 )
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Awaitable
+
+from qtpy import QtCore, QtWidgets
+
 from koil.bridge import get_koiled_loop_or_raise
 from koil.context import blocked_calls, current_callback
-from koil.protocols import SignalProtocol
-from qtpy import QtCore, QtWidgets
 from koil.loop import Koil
+from koil.protocols import SignalProtocol
 from koil.utils import (
     _call_threadsafe,
     _context_delta,
-    run_async_sharing_context,
     iterate_async_sharing_context,
+    run_async_sharing_context,
 )
-import uuid
-from .utils import KoilFuture
+
 from .errors import CancelledError, KoilError
+from .utils import KoilFuture
 
 logger = logging.getLogger(__name__)
 
@@ -406,8 +409,8 @@ class async_to_qt(QtCore.QObject, Generic[T, P]):
     returned: SignalProtocol[T] = signal_builder(object)  # type: ignore
 
     _returnedwithoutcontext: "SignalProtocol[tuple[T, contextvars.Context]]" = (
-        signal_builder(object)
-    )  # type: ignore
+        signal_builder(object)  # type: ignore
+    )
 
     def __init__(
         self,

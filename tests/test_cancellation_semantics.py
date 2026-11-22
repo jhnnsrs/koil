@@ -113,7 +113,9 @@ def test_an_error_raised_while_unwinding_is_what_the_caller_gets() -> None:
 # -- a cancelled worker thread ----------------------------------------------
 
 
-async def test_a_call_in_flight_raises_thread_cancelled_when_its_worker_is_cancelled() -> None:
+async def test_a_call_in_flight_raises_thread_cancelled_when_its_worker_is_cancelled() -> (
+    None
+):
     started = threading.Event()
     caught: list[BaseException] = []
 
@@ -147,7 +149,9 @@ async def test_handling_a_cancelled_future_inside_a_worker() -> None:
     assert await run_threaded(work) == "handled"
 
 
-async def test_a_cancelled_future_escaping_a_worker_does_not_cancel_the_awaiting_task() -> None:
+async def test_a_cancelled_future_escaping_a_worker_does_not_cancel_the_awaiting_task() -> (
+    None
+):
     """It is an error of that function, not a cancellation of whoever awaits it."""
 
     def work() -> None:

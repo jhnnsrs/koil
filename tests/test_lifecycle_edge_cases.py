@@ -7,9 +7,9 @@ import asyncio
 import contextvars
 import logging
 import sys
-import warnings
 import threading
 import time
+import warnings
 from typing import Any
 
 import pytest
@@ -256,7 +256,9 @@ class Owner(Composition):
 
 def test_a_subclass_entering_only_what_it_owns() -> None:
     log = Log()
-    owner = Owner(owned=Member(name="owned", log=log), borrowed=Member(name="borrowed", log=log))
+    owner = Owner(
+        owned=Member(name="owned", log=log), borrowed=Member(name="borrowed", log=log)
+    )
     with owner:
         pass
     assert log.events == ["enter owned", "exit owned"]

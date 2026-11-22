@@ -24,6 +24,8 @@ dev = [
     "cloudpickle>=2.2.1,<3",
     "pyqt5-stubs>=5.15.6.0",
     "python-semantic-release>=9.21.1",
+    "ruff==0.17.6",
+    "basedpyright==1.40.2",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -33,9 +35,6 @@ include = ["koil"]
 include = ["koil"]
 
 
-[tool.ruff.lint]
-extend-select = ["UP"]
-extend-ignore = ["UP037", "UP038", "UP042"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -60,9 +59,6 @@ search_path = ["koil"]
 type = "docusaurus"
 docs_base_path = "website/docs"
 
-[tool.mypy]
-ignore_missing_imports = true
-strict = true
 
 
 

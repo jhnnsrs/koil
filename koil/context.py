@@ -6,6 +6,7 @@ it runs on, the per-task cancellation event injected by
 :func:`~koil.bridge.run_threaded`, and the per-loop bookkeeping (worker pool,
 calls still in flight) of the loops koil itself started.
 """
+
 import asyncio
 import concurrent.futures
 import contextvars
@@ -184,6 +185,7 @@ Worker threads read :meth:`~KoilThreadSafeEvent.is_set` via
 :func:`check_cancelled`; the event is set from the loop when the enclosing
 asyncio task is cancelled.
 """
+
 
 class BlockedCall:
     """One thread blocked in :func:`~koil.bridge.unkoil`, and the task it waits for."""

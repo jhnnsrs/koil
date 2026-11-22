@@ -32,12 +32,14 @@ class KoilExecutor(concurrent.futures.Executor):
     Threads are started on demand, up to *max_workers*, and reused.
     """
 
-    def __init__(self, max_workers: int, thread_name_prefix: str = "KoilWorker") -> None:
+    def __init__(
+        self, max_workers: int, thread_name_prefix: str = "KoilWorker"
+    ) -> None:
         if max_workers <= 0:
             raise ValueError("max_workers must be greater than 0")
         self._max_workers = max_workers
         self._prefix = f"{thread_name_prefix}-{next(_pool_counter)}"
-        self._work: "queue.SimpleQueue[_WorkItem | None]" = queue.SimpleQueue()
+        self._work: queue.SimpleQueue[_WorkItem | None] = queue.SimpleQueue()
         self._idle = threading.Semaphore(0)
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
@@ -49,7 +51,7 @@ class KoilExecutor(concurrent.futures.Executor):
         with self._lock:
             if self._shutdown:
                 raise RuntimeError("cannot schedule new futures after shutdown")
-            future: "concurrent.futures.Future[T]" = concurrent.futures.Future()
+            future: concurrent.futures.Future[T] = concurrent.futures.Future()
             self._work.put((future, fn, args, kwargs))
             # An idle thread will pick the item up; only start another when
             # every existing one is busy.

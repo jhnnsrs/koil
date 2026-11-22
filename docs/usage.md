@@ -12,9 +12,11 @@ The `unkoil` function allows you to call an async function from a synchronous co
 import asyncio
 from koil import Koil, unkoil
 
+
 async def async_sleep(seconds):
     await asyncio.sleep(seconds)
     return f"Slept for {seconds} seconds"
+
 
 # Initialize the Koil loop (usually done once at the start of your program)
 with Koil():
@@ -31,10 +33,12 @@ with Koil():
 from koil import Koil, unkoil_gen
 import asyncio
 
+
 async def async_counter(limit):
     for i in range(limit):
         await asyncio.sleep(0.1)
         yield i
+
 
 with Koil():
     # Iterate synchronously
@@ -52,18 +56,19 @@ The class must implement `__aenter__` and `__aexit__`. The decorator adds `__ent
 from koil import koilable, unkoil
 import asyncio
 
+
 @koilable
 class MyAsyncService:
     def __init__(self):
         self.connected = False
 
     async def __aenter__(self):
-        await asyncio.sleep(0.1) # Simulate connection
+        await asyncio.sleep(0.1)  # Simulate connection
         self.connected = True
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await asyncio.sleep(0.1) # Simulate teardown
+        await asyncio.sleep(0.1)  # Simulate teardown
         self.connected = False
 
     async def afetch_data(self):
@@ -76,10 +81,12 @@ class MyAsyncService:
         # Expose a sync version using unkoil
         return unkoil(self.afetch_data)
 
+
 # Usage in Async Context
 async def async_main():
     async with MyAsyncService() as service:
         print(await service.afetch_data())
+
 
 # Usage in Sync Context (Koil handles the loop automatically)
 def sync_main():

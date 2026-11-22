@@ -1,4 +1,5 @@
 """Tests for KoilThreadSafeEvent and unkoil_gen send-value semantics."""
+
 import asyncio
 import threading
 
@@ -6,7 +7,6 @@ import pytest
 
 from koil.bridge import KoilThreadSafeEvent, unkoil_gen
 from koil.loop import Koil
-
 
 # ---------------------------------------------------------------------------
 # KoilThreadSafeEvent

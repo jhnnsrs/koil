@@ -1,22 +1,25 @@
 import asyncio
 import contextvars
+
 import pytest
 
 # Skip the entire module unless PyQt5 (and pytest-qt) are installed.
 pytest.importorskip("PyQt5")
 pytest.importorskip("pytestqt")
 
-from PyQt5 import QtWidgets, QtCore
-from koil.qt import QtFuture, QtGenerator, create_qt_koil
+from PyQt5 import QtCore, QtWidgets
+from pytestqt.qtbot import QtBot  # type: ignore
+
+from koil.contrib.pytest_qt import wait_for_qtgenerator, wait_for_qttask
 from koil.qt import (
+    QtFuture,
+    QtGenerator,
     async_gen_to_qt,
     async_to_qt,
-    qt_to_async,
+    create_qt_koil,
     qt_gen_to_async_gen,
+    qt_to_async,
 )
-from pytestqt.qtbot import QtBot # type: ignore
-from koil.contrib.pytest_qt import wait_for_qttask, wait_for_qtgenerator
-
 
 x: contextvars.ContextVar["int"] = contextvars.ContextVar("x")
 
@@ -42,7 +45,6 @@ async def sleep_and_yield(times: int = 5):
         yield i
 
 
-
 class KoiledWidget(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent=parent, flags=QtCore.Qt.WindowFlags())
@@ -62,7 +64,6 @@ class KoiledWidget(QtWidgets.QWidget):
         self.greet_label.setText("Hello!")
 
 
-
 class KoiledInterferingWidget(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -74,7 +75,7 @@ class KoiledInterferingWidget(QtWidgets.QWidget):
         self.call_context_button = QtWidgets.QPushButton("Call Context")
 
         self.sleep_and_resolve_task = async_to_qt(sleep_and_resolve)
-        #self.sleep_and_resolve_task.returned.connect(self.task_finished)
+        # self.sleep_and_resolve_task.returned.connect(self.task_finished)
 
         self.sleep_and_use_context_task = async_to_qt(sleep_and_use_context)
         self.sleep_and_use_context_task.returned.connect(self.task_finished)
@@ -201,7 +202,6 @@ class KoiledGeneratorWidget(QtWidgets.QWidget):
             print(x)
 
 
-
 @pytest.mark.qt
 def test_koil_qt_no_interference(qtbot: QtBot):
     """Tests if just adding koil interferes with normal
@@ -211,10 +211,10 @@ def test_koil_qt_no_interference(qtbot: QtBot):
         qtbot (_type_): _description_
     """
     widget = KoiledWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
     # click in the Greet button and make sure it updates the appropriate label
-    qtbot.mouseClick(widget.button_greet, QtCore.Qt.LeftButton) # type: ignore
+    qtbot.mouseClick(widget.button_greet, QtCore.Qt.LeftButton)  # type: ignore
 
     assert widget.greet_label.text() == "Hello!"
 
@@ -223,26 +223,26 @@ def test_koil_qt_no_interference(qtbot: QtBot):
 def test_koil_qt_call_task(qtbot: QtBot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
-    
     wait_for_qttask(
         qtbot,
         widget.sleep_and_resolve_task,
-        lambda qtbot: qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton), # type: ignore
+        lambda qtbot: qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton),  # type: ignore
     )
 
+
 @pytest.mark.qt
-def test_call_gen(qtbot: QtBot ):
+def test_call_gen(qtbot: QtBot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
     # click in the Greet button and make sure it updates the appropriate label
     wait_for_qtgenerator(
         qtbot,
         widget.sleep_and_yield_task,
-        lambda qtbot: qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton), # type: ignore
+        lambda qtbot: qtbot.mouseClick(widget.call_gen_button, QtCore.Qt.LeftButton),  # type: ignore
     )
 
 
@@ -250,13 +250,12 @@ def test_call_gen(qtbot: QtBot ):
 def test_call_future(qtbot: QtBot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingFutureWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
-    
     wait_for_qttask(
         qtbot,
         widget.my_coro_task,
-        lambda qtbot: qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton), # type: ignore
+        lambda qtbot: qtbot.mouseClick(widget.call_task_button, QtCore.Qt.LeftButton),  # type: ignore
     )
     assert widget.task_was_run is True
     assert widget.coroutine_was_run is True
@@ -266,30 +265,29 @@ def test_call_future(qtbot: QtBot):
 def test_call_raise(qtbot: QtBot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
     # click in the Greet button and make sure it updates the appropriate label
 
-    with qtbot.waitSignal(widget.sleep_and_raise_task.errored, timeout=1000) as b: # type: ignore
-        qtbot.mouseClick(widget.call_raise_button, QtCore.Qt.LeftButton) # type: ignore
-
+    with qtbot.waitSignal(widget.sleep_and_raise_task.errored, timeout=1000) as b:  # type: ignore
+        qtbot.mouseClick(widget.call_raise_button, QtCore.Qt.LeftButton)  # type: ignore
 
 
 @pytest.mark.qt
 def test_context(qtbot: QtBot):
     """Tests if we can call a task from a koil widget."""
     widget = KoiledInterferingWidget()
-    qtbot.addWidget(widget) # type: ignore
+    qtbot.addWidget(widget)  # type: ignore
 
     x.set(5)
     # click in the Greet button and make sure it updates the appropriate label
 
-    with qtbot.waitSignal( # type: ignore
+    with qtbot.waitSignal(  # type: ignore
         widget.sleep_and_use_context_task.returned, timeout=1000
     ) as b:
-        qtbot.mouseClick(widget.call_context_button, QtCore.Qt.LeftButton) # type: ignore
+        qtbot.mouseClick(widget.call_context_button, QtCore.Qt.LeftButton)  # type: ignore
 
-    assert b.args[0] == 6   # type: ignore
+    assert b.args[0] == 6  # type: ignore
 
 
 @pytest.mark.qt

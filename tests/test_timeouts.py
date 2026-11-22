@@ -154,9 +154,7 @@ def test_result_external_cancel_raises_cancelled_not_timeout():
         future.cancel(reason="external")
         # An externally-cancelled task surfaces as a CancelledError (never as
         # KoilTimeoutError), even when result() was given a timeout.
-        with pytest.raises(
-            (asyncio.CancelledError, concurrent.futures.CancelledError)
-        ):
+        with pytest.raises((asyncio.CancelledError, concurrent.futures.CancelledError)):
             future.result(timeout=5.0)
 
 

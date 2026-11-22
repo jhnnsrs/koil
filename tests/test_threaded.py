@@ -1,7 +1,9 @@
 import asyncio
-from koil.bridge import unkoil, unkoil_gen
-from .context import AsyncContextManager
+
 from koil import Koil
+from koil.bridge import unkoil, unkoil_gen
+
+from .context import AsyncContextManager
 
 
 async def sleep(ins: int) -> int:
@@ -19,7 +21,9 @@ async def iterating():
 
 def test_sync_context():
     with AsyncContextManager() as c:
-        assert unkoil(c.aprint) == "sss", "Koil realized its async and was okay with that"
+        assert unkoil(c.aprint) == "sss", (
+            "Koil realized its async and was okay with that"
+        )
 
 
 async def test_async_context():

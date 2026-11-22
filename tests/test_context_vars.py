@@ -1,16 +1,14 @@
 """Tests that contextvars are correctly propagated into spawned threads."""
+
 import contextvars
 
-import pytest
-
-from koil.composition.base import KoiledModel
 from koil.bridge import (
     iterate_threaded,
     iterate_threaded_bridged,
     run_threaded,
     run_threaded_bridged,
 )
-
+from koil.composition.base import KoiledModel
 
 request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "request_id", default="none"

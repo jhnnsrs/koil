@@ -4,6 +4,8 @@ import inspect
 import logging
 import threading
 import warnings
+from collections.abc import AsyncGenerator, Callable, Coroutine, Generator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from types import TracebackType
 from typing import (
     Any,
@@ -14,8 +16,6 @@ from typing import (
     TypeVar,
     overload,
 )
-from collections.abc import AsyncGenerator, Callable, Coroutine, Generator
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
 from koil.bridge import (
     unkoil,
@@ -145,7 +145,7 @@ def koilable(
             raise TypeError(
                 f"{cls.__name__}.__aexit__ must be a coroutine function (async def)"
             )
-        setattr(cls, "__koilable__", True)
+        cls.__koilable__ = True
 
         # Whether each (possibly nested) enter of an instance started the Koil
         # it runs on. Only that enter's exit may stop the loop again: an inner
@@ -220,13 +220,13 @@ def koilable(
         async def aenter(self: Koilable):
             return await self.__aenter__()
 
-        setattr(cls, "__enter__", koiled_enter)
-        setattr(cls, "__exit__", koiled_exit)
+        cls.__enter__ = koiled_enter
+        cls.__exit__ = koiled_exit
         if add_connectors:
-            setattr(cls, "aexit", aexit)
-            setattr(cls, "aenter", aenter)
-            setattr(cls, "exit", koiled_param_exit)
-            setattr(cls, "enter", koiled_enter)
+            cls.aexit = aexit
+            cls.aenter = aenter
+            cls.exit = koiled_param_exit
+            cls.enter = koiled_enter
 
         return cls
 
@@ -253,7 +253,9 @@ def _in_async_context() -> bool:
 
 
 @overload
-def koiled(maybe_fn: Callable[P, AsyncGenerator[Y, S]]) -> Callable[P, Generator[Y, S, None]]: ...
+def koiled(
+    maybe_fn: Callable[P, AsyncGenerator[Y, S]],
+) -> Callable[P, Generator[Y, S, None]]: ...
 
 
 @overload

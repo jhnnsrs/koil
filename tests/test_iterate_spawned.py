@@ -1,9 +1,10 @@
 import asyncio
-import pytest
-from koil.bridge import iterate_threaded
-from .context import AsyncContextManager
-from koil import Koil
 import time
+
+import pytest
+
+from koil import Koil
+from koil.bridge import iterate_threaded
 
 
 async def sleep(ins: int) -> int:
